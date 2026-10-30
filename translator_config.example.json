@@ -1,0 +1,13 @@
+{
+  "ui_lang": "ru",
+  "engine": "google",
+  "deepl_api_key": "",
+  "ollama_url": "http://localhost:11434",
+  "ollama_model": "qwen2.5:7b",
+  "custom_api_url": "https://api.openai.com/v1",
+  "custom_api_key": "",
+  "custom_api_model": "gpt-4o-mini",
+  "target_lang": "ru",
+  "show_library": true,
+  "concise_mode": true
+}

@@ -1,0 +1,31 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller temporary build artifacts
+build/
+dist/
+*.spec
+
+# Built application standalone executable (60+ MB, build locally via PyInstaller)
+ProbablyTranslator.exe
+
+# Local user configuration with potential private API keys
+translator_config.json
+
+# Local LLM logging directory
+LLMLogs/
+*.log
+
+# Operating System files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# IDE / Editor configuration
+.vscode/
+.idea/
+*.swp
+*.swo
