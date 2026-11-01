@@ -1,0 +1,31 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: pip install customtkinter packaging pyinstaller
+      - name: Syntax check
+        run: python -c "import ast; ast.parse(open('ProbablyTranslator.py', encoding='utf-8').read()); print('Syntax OK')"
+      - name: Build ProbablyTranslator.exe
+        run: python -m PyInstaller --noconfirm --onefile --windowed --name "ProbablyTranslator" --icon "icon.ico" --distpath "dist" --add-data "bin;bin" --add-data "icon.ico;." --collect-all customtkinter "ProbablyTranslator.py"
+      - name: Publish release asset
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ProbablyTranslator.exe
+          generate_release_notes: false
+          body_path: RELEASE_NOTES.md

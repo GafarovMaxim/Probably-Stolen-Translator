@@ -1,6 +1,8 @@
 """
 ProbablyTranslator - Universal Mod Localization Studio for 'Probably Stolen'
-- Top-bar integrated live auto-translation progress with cancel button
+- v2.5.0: reworked UI (design tokens, single-canvas mod library, pooled widgets), background loading/build,
+  async machine drafts (no network calls on the UI thread), autosave of manual edits
+- Live auto-translation progress with cancel button (status bar)
 - Crowdin-style Translation Suggestions (multiple alternative variants)
 - 100% reliable layout-independent clipboard (Ctrl+C, Ctrl+V on Russian & English)
 - Ollama Auto-detect: 127.0.0.1:11434 with dynamic installed models dropdown
@@ -19,7 +21,6 @@ import json
 import csv
 import re
 import time
-import math
 import shutil
 import tempfile
 import uuid
@@ -31,11 +32,16 @@ import subprocess
 import ctypes
 from ctypes import wintypes
 import platform
+import functools
+from concurrent.futures import ThreadPoolExecutor
 import xml.etree.ElementTree as ET
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog
+from tkinter import font as tkfont
 import customtkinter as ctk
+
+APP_VERSION = "2.5.0"
 
 # Appearance theme
 ctk.set_appearance_mode("Dark")
@@ -247,6 +253,60 @@ I18N = {
         "tooltip_ai_req": "Запросить перевод у нейросети ({engine})",
         "tooltip_google_req": "Запросить быстрый перевод у Google Translate",
         "tooltip_mod_update_avail": "В Workshop доступна новая версия: {ver} (установлена {inst})",
+        # --- v2.5.0 ---
+        "empty_title": "Перетащите папку мода в окно",
+        "empty_sub": "или выберите мод в библиотеке слева, либо нажмите «Обзор»",
+        "browse_title": "Выберите папку мода",
+        "err_mod_not_found": "Папка мода не найдена!",
+        "toast_loaded": "Загружен мод «{name}»: {count} строк",
+        "err_load": "Ошибка загрузки мода: {err}",
+        "toast_new_top": "Новые строки из обновления перемещены в начало!",
+        "toast_concise_applied": "Применен краткий вариант для интерфейса",
+        "saved_flash": "✓ Сохранено!",
+        "requesting": "⏳ Запрос...",
+        "toast_translated_by": "✓ Перевод получен от {engine}",
+        "menu_edit": "Редактировать (F2)",
+        "menu_translate": "Перевести строку",
+        "menu_concise": "✂ Сократить перевод",
+        "menu_copy_orig": "Копировать оригинал",
+        "menu_clear": "Очистить перевод",
+        "warn_pick_mod": "Сначала выберите мод из библиотеки!",
+        "warn_all_translated": "Все строки уже переведены!",
+        "autotr_progress": "✨ {engine}: {done}/{total} ({pct}%)",
+        "autotr_stopping": "Остановка автоперевода...",
+        "autotr_done_lbl": "✓ Завершено: {count} строк!",
+        "autotr_done_toast": "Автоперевод завершен! Переведено {count} строк.",
+        "status_translating_n": "Перевод: {done}/{total} строк...",
+        "tooltip_stop_autotr": "Остановить автоперевод",
+        "building": "Сборка...",
+        "toast_build_ok": "Сборка успешна: {res}",
+        "err_build": "Ошибка сборки: {err}",
+        "installing": "Установка в игру...",
+        "toast_installed": "Установлен в Mods/ с маркировкой [{lang}]: {name}",
+        "err_install": "Ошибка установки в Mods/: {err}",
+        "lib_scanning": "Сканирование библиотеки...",
+        "lib_empty": "Моды не найдены",
+        "lib_empty_hint": "Проверьте пути к Steam Workshop и папке Mods/ или откройте мод вручную",
+        "lib_no_match": "Ничего не найдено",
+        "no_models": "Модели не найдены",
+        "eng_google": "Google NMT (бесплатно, быстро, без ключа)",
+        "eng_deepl": "DeepL Free / Pro API",
+        "eng_ollama": "Ollama / локальный AI (qwen2.5, deepseek, llama3)",
+        "eng_custom": "Custom OpenAI / OpenRouter API",
+        "lbl_deepl_key": "DeepL Auth Key:",
+        "lbl_ollama": "Ollama URL и установленная модель:",
+        "lbl_custom": "Custom API: URL / ключ / модель:",
+        "lbl_models_found": "Найдено моделей: {count}",
+        "lbl_models_loading": "Поиск моделей...",
+        "logs_info": "📁 Папка LLMLogs: {count} сессий ({size})",
+        "btn_clear_logs": "🧹 Очистить логи LLM",
+        "btn_open_logs": "📂 Открыть папку",
+        "btn_save_settings": "Сохранить настройки",
+        "toast_settings_saved": "Настройки движка сохранены!",
+        "toast_logs_cleared": "Удалено {count} файлов логов LLM",
+        "progress_total": "Прогресс",
+        "legend_hotkeys": "Ctrl+Enter — сохранить и далее   Alt+↑/↓ — навигация   Ctrl+1…3 — вариант",
+        "loading_mod": "Загрузка…",
     },
     "en": {
         "app_title": "ProbablyTranslator - Mod Localization Studio for Probably Stolen",
@@ -331,6 +391,60 @@ I18N = {
         "tooltip_ai_req": "Request translation from neural model ({engine})",
         "tooltip_google_req": "Request quick translation from Google Translate",
         "tooltip_mod_update_avail": "Workshop update available: {ver} (installed {inst})",
+        # --- v2.5.0 ---
+        "empty_title": "Drop a mod folder onto the window",
+        "empty_sub": "or pick a mod from the library on the left, or press Browse",
+        "browse_title": "Select mod folder",
+        "err_mod_not_found": "Mod folder not found!",
+        "toast_loaded": "Loaded mod '{name}': {count} strings",
+        "err_load": "Failed to load mod: {err}",
+        "toast_new_top": "New strings from the update moved to the top!",
+        "toast_concise_applied": "Compact UI variant applied",
+        "saved_flash": "✓ Saved!",
+        "requesting": "⏳ Requesting...",
+        "toast_translated_by": "✓ Translation received from {engine}",
+        "menu_edit": "Edit (F2)",
+        "menu_translate": "Translate string",
+        "menu_concise": "✂ Make concise",
+        "menu_copy_orig": "Copy original",
+        "menu_clear": "Clear translation",
+        "warn_pick_mod": "Pick a mod from the library first!",
+        "warn_all_translated": "All strings are already translated!",
+        "autotr_progress": "✨ {engine}: {done}/{total} ({pct}%)",
+        "autotr_stopping": "Stopping auto-translate...",
+        "autotr_done_lbl": "✓ Done: {count} strings!",
+        "autotr_done_toast": "Auto-translate finished! Translated {count} strings.",
+        "status_translating_n": "Translating: {done}/{total} strings...",
+        "tooltip_stop_autotr": "Stop auto-translate",
+        "building": "Building...",
+        "toast_build_ok": "Build succeeded: {res}",
+        "err_build": "Build failed: {err}",
+        "installing": "Installing into the game...",
+        "toast_installed": "Installed into Mods/ with [{lang}] marker: {name}",
+        "err_install": "Install to Mods/ failed: {err}",
+        "lib_scanning": "Scanning library...",
+        "lib_empty": "No mods found",
+        "lib_empty_hint": "Check the Steam Workshop and Mods/ paths, or open a mod manually",
+        "lib_no_match": "Nothing found",
+        "no_models": "No models found",
+        "eng_google": "Google NMT (free, fast, no key)",
+        "eng_deepl": "DeepL Free / Pro API",
+        "eng_ollama": "Ollama / local AI (qwen2.5, deepseek, llama3)",
+        "eng_custom": "Custom OpenAI / OpenRouter API",
+        "lbl_deepl_key": "DeepL Auth Key:",
+        "lbl_ollama": "Ollama URL & installed model:",
+        "lbl_custom": "Custom API: URL / key / model:",
+        "lbl_models_found": "Models found: {count}",
+        "lbl_models_loading": "Looking for models...",
+        "logs_info": "📁 LLMLogs folder: {count} sessions ({size})",
+        "btn_clear_logs": "🧹 Clear LLM logs",
+        "btn_open_logs": "📂 Open folder",
+        "btn_save_settings": "Save settings",
+        "toast_settings_saved": "Engine settings saved!",
+        "toast_logs_cleared": "Deleted {count} LLM log files",
+        "progress_total": "Progress",
+        "legend_hotkeys": "Ctrl+Enter save & next   Alt+↑/↓ navigate   Ctrl+1…3 variant",
+        "loading_mod": "Loading…",
     }
 }
 
@@ -876,8 +990,11 @@ def translate_batch(batch_texts, target_lang, source_lang="auto", engine="google
 # Crowdin-Style Multi-Variant Suggestions Generator
 # -------------------------------------------------------------
 
-def generate_crowdin_suggestions(orig: str, current_trans: str, target_lang="ru", ai_res=None, ai_engine="google", ai_model=""):
-    """Generates 2-3 distinct translation suggestions with clear source labeling."""
+def generate_crowdin_suggestions(orig: str, current_trans: str, target_lang="ru", ai_res=None, ai_engine="google", ai_model="", draft=None):
+    """Generates 2-3 distinct translation suggestions with clear source labeling.
+
+    Pure and instant: never touches the network. A machine draft for untranslated rows
+    is fetched asynchronously by the UI and passed in via `draft`."""
     suggestions = []
     if not orig or not orig.strip():
         return suggestions
@@ -896,9 +1013,8 @@ def generate_crowdin_suggestions(orig: str, current_trans: str, target_lang="ru"
 
     # 2. Main / Current / Literary Translation
     primary = current_trans.strip() if current_trans else ""
-    if not primary and not suggestions:
-        prim_list = translate_batch([orig_clean], target_lang=target_lang)
-        primary = prim_list[0] if prim_list else orig_clean
+    if not primary and not suggestions and draft:
+        primary = draft.strip()
 
     if primary and all(s["text"] != primary for s in suggestions):
         suggestions.append({
@@ -951,6 +1067,41 @@ def generate_crowdin_suggestions(orig: str, current_trans: str, target_lang="ru"
 
     return suggestions[:3]
 
+_CONCISE_RULES = [(re.compile(p, re.IGNORECASE), rep) for p, rep in (
+    (r'Для вас все было сделано,?\s*и завтра кто-то придет к вашей двери\.?', 'Мастер будет завтра'),
+    (r'Всё оформлено, мастер прибудет завтра\.', 'Мастер будет завтра'),
+    (r'Ошибка сканирования каталога товаров', 'Ошибка каталога'),
+    (r'Добавлено в каталог товаров', 'В каталог добавлено'),
+    (r'Автосохранение при открытии/закрытии магазина', 'Автосохранение магазина'),
+    (r'Пожалуйста, выберите', 'Выберите'),
+    (r'Нажмите для подтверждения', 'Подтвердить'),
+    (r'Подтвердить действие', 'Подтвердить'),
+    (r'Отменить действие', 'Отмена'),
+    (r'Сохранить изменения', 'Сохранить'),
+    (r'Вернуться назад', 'Назад'),
+    (r'Закрыть окно', 'Закрыть'),
+    (r'В настоящее время', 'Сейчас'),
+    (r'В данный момент', 'Сейчас'),
+    (r'Количество предметов', 'Кол-во'),
+    (r'Количество товаров', 'Кол-во'),
+    (r'Количество', 'Кол-во'),
+    (r'Успешно сохранено', 'Сохранено'),
+    (r'Успешно загружено', 'Загружено'),
+    (r'Вы действительно хотите', 'Хотите'),
+    (r'Секунд\b', 'сек.'),
+    (r'Минут\b', 'мин.'),
+    (r'Уровень\b', 'Ур.'),
+    (r'Максимальное\b', 'Макс.'),
+    (r'Минимальное\b', 'Мин.'),
+    (r'крепления драйвера на рамку', 'драйвера кадра'),
+    (r'крепления драйвера', 'драйвера'),
+    (r'не удалось выполнить', 'сбой'),
+    (r'пользовательский интерфейс', 'интерфейс'),
+)]
+_RE_PLEASE = re.compile(r'\bпожалуйста\b,?\s*', re.IGNORECASE)
+_RE_SPACES = re.compile(r'\s{2,}')
+
+@functools.lru_cache(maxsize=8192)
 def make_concise(orig: str, trans: str) -> str:
     """Produces a meaning-preserving concise equivalent without losing punctuation like colons."""
     if not trans: return trans
@@ -963,42 +1114,11 @@ def make_concise(orig: str, trans: str) -> str:
     trailing_exclam = orig_str.endswith('!') or orig_str.endswith('！') or res.endswith('!')
     trailing_dots = orig_str.endswith('...') or orig_str.endswith('…') or res.endswith('...') or res.endswith('…')
 
-    replacements = [
-        (r'Для вас все было сделано,?\s*и завтра кто-то придет к вашей двери\.?', 'Мастер будет завтра'),
-        (r'Всё оформлено, мастер прибудет завтра\.', 'Мастер будет завтра'),
-        (r'Ошибка сканирования каталога товаров', 'Ошибка каталога'),
-        (r'Добавлено в каталог товаров', 'В каталог добавлено'),
-        (r'Автосохранение при открытии/закрытии магазина', 'Автосохранение магазина'),
-        (r'Пожалуйста, выберите', 'Выберите'),
-        (r'Нажмите для подтверждения', 'Подтвердить'),
-        (r'Подтвердить действие', 'Подтвердить'),
-        (r'Отменить действие', 'Отмена'),
-        (r'Сохранить изменения', 'Сохранить'),
-        (r'Вернуться назад', 'Назад'),
-        (r'Закрыть окно', 'Закрыть'),
-        (r'В настоящее время', 'Сейчас'),
-        (r'В данный момент', 'Сейчас'),
-        (r'Количество предметов', 'Кол-во'),
-        (r'Количество товаров', 'Кол-во'),
-        (r'Количество', 'Кол-во'),
-        (r'Успешно сохранено', 'Сохранено'),
-        (r'Успешно загружено', 'Загружено'),
-        (r'Вы действительно хотите', 'Хотите'),
-        (r'Секунд\b', 'сек.'),
-        (r'Минут\b', 'мин.'),
-        (r'Уровень\b', 'Ур.'),
-        (r'Максимальное\b', 'Макс.'),
-        (r'Минимальное\b', 'Мин.'),
-        (r'крепления драйвера на рамку', 'драйвера кадра'),
-        (r'крепления драйвера', 'драйвера'),
-        (r'не удалось выполнить', 'сбой'),
-        (r'пользовательский интерфейс', 'интерфейс'),
-    ]
-    for pattern, rep in replacements:
-        res = re.sub(pattern, rep, res, flags=re.IGNORECASE)
+    for rx, rep in _CONCISE_RULES:
+        res = rx.sub(rep, res)
 
-    res = re.sub(r'\bпожалуйста\b,?\s*', '', res, flags=re.IGNORECASE)
-    res = re.sub(r'\s{2,}', ' ', res).strip()
+    res = _RE_PLEASE.sub('', res)
+    res = _RE_SPACES.sub(' ', res).strip()
 
     res = res.rstrip('.:：!！?？')
 
@@ -1011,7 +1131,9 @@ def make_concise(orig: str, trans: str) -> str:
 
     return res
 
+@functools.lru_cache(maxsize=8192)
 def analyze_ui_fit(orig: str, trans: str) -> dict:
+    """Cached by (orig, trans): the result is a pure function of both strings."""
     orig_len = max(len(orig.strip()), 1)
     trans_len = len(trans.strip())
     ratio = trans_len / orig_len
@@ -1140,6 +1262,7 @@ class ModProject:
     def __init__(self, mod_path):
         self.mod_path = os.path.abspath(mod_path)
         self.strings = []
+        self.by_index = {}
         self.translations = {}
         self.manifest = parse_mod_manifest(self.mod_path)
         self.is_csv_mod = False
@@ -1163,6 +1286,10 @@ class ModProject:
                             self.csv_base_file = p
                             break
                     break
+
+    def rebuild_index(self):
+        """O(1) lookup of a string record by its index (the UI used linear scans)."""
+        self.by_index = {st["index"]: st for st in self.strings}
 
     def get_translations_cache_path(self, lang):
         return os.path.join(self.mod_path, f"translations_{lang}.json")
@@ -1232,6 +1359,7 @@ class ModProject:
                         "status": "untranslated"
                     })
                     idx += 1
+            self.rebuild_index()
             self.load_existing_translations(target_lang)
             return len(self.strings)
 
@@ -1242,11 +1370,7 @@ class ModProject:
         if not dll_files:
             raise FileNotFoundError(f"No .dll files found in {self.mod_path}")
 
-        all_strings = []
-        seen_orig = set()
-        str_idx = 0
-
-        for dll_name in dll_files:
+        def _scan_dll(dll_name):
             bak_path = os.path.join(self.mod_path, dll_name + ".bak")
             target_dll = bak_path if os.path.exists(bak_path) else os.path.join(self.mod_path, dll_name)
 
@@ -1260,30 +1384,50 @@ class ModProject:
             proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", startupinfo=startupinfo)
             if proc.returncode != 0:
                 print(f"[StringPatcher] Warning: {proc.stderr}")
-                continue
+                return dll_name, []
 
+            found = []
             if os.path.exists(temp_json):
                 try:
                     with open(temp_json, "r", encoding="utf-8") as f:
                         raw_list = json.load(f)
                     for item in raw_list:
                         orig = (item.get("orig") or item.get("zh") or "").strip()
-                        if orig and orig not in seen_orig:
-                            seen_orig.add(orig)
-                            all_strings.append({
-                                "index": str_idx,
-                                "original": orig,
-                                "translation": "",
-                                "type": "DLL",
-                                "dll": dll_name,
-                                "status": "untranslated"
-                            })
-                            str_idx += 1
+                        if orig:
+                            found.append(orig)
                 finally:
                     try: os.remove(temp_json)
                     except Exception: pass
+            return dll_name, found
+
+        # Each DLL is disassembled by an independent subprocess, so scan them in parallel.
+        # Results are merged in the original DLL order to keep indexes deterministic.
+        if len(dll_files) > 1:
+            with ThreadPoolExecutor(max_workers=min(4, len(dll_files))) as pool:
+                scanned = list(pool.map(_scan_dll, dll_files))
+        else:
+            scanned = [_scan_dll(dll_files[0])]
+
+        all_strings = []
+        seen_orig = set()
+        str_idx = 0
+        for dll_name, found in scanned:
+            for orig in found:
+                if orig in seen_orig:
+                    continue
+                seen_orig.add(orig)
+                all_strings.append({
+                    "index": str_idx,
+                    "original": orig,
+                    "translation": "",
+                    "type": "DLL",
+                    "dll": dll_name,
+                    "status": "untranslated"
+                })
+                str_idx += 1
 
         self.strings = all_strings
+        self.rebuild_index()
         self.load_existing_translations(target_lang)
         return len(self.strings)
 
@@ -1457,6 +1601,260 @@ class ModProject:
 # Modern Studio GUI Application
 # -------------------------------------------------------------
 
+class Theme:
+    """Design tokens shared by every widget (single source of truth for colors)."""
+    BG = "#090d16"
+    PANEL = "#0f172a"
+    CENTER = "#0b1120"
+    BAR = "#111827"
+    CARD = "#182234"
+    CARD_HOVER = "#1e2b42"
+    CARD_ACTIVE = "#10304d"
+    BORDER = "#223048"
+    FIELD = "#1e293b"
+    TEXT = "#f8fafc"
+    TEXT_SOFT = "#e2e8f0"
+    MUTED = "#94a3b8"
+    DIM = "#64748b"
+    ACCENT = "#0284c7"
+    ACCENT_LIGHT = "#38bdf8"
+    OK = "#10b981"
+    WARN = "#f59e0b"
+    ERR = "#ef4444"
+    # (fill, hover)
+    BTN = {
+        "ghost": ("#1e293b", "#334155"),
+        "muted": ("#334155", "#475569"),
+        "primary": ("#2563eb", "#1d4ed8"),
+        "success": ("#16a34a", "#15803d"),
+        "info": ("#0891b2", "#0e7490"),
+        "warn": ("#d97706", "#b45309"),
+        "danger": ("#dc2626", "#b91c1c"),
+    }
+    # (fill, border, text) - pill palette from AGENTS.md invariants
+    PILLS = {
+        "steam": ("#0b1e3b", "#38bdf8", "#38bdf8"),
+        "mods": ("#062e1e", "#10b981", "#34d399"),
+        "csv": ("#042724", "#14b8a6", "#2dd4bf"),
+        "dll": ("#200d3d", "#a855f7", "#c084fc"),
+        "update": ("#3a1503", "#f59e0b", "#fbbf24"),
+        "installed": ("#052e16", "#16a34a", "#4ade80"),
+    }
+
+
+NO_MODELS_SENTINEL = "Модели не найдены"
+
+
+def _disp(text):
+    """Single-line representation of a string for the table."""
+    if "\n" in text or "\r" in text:
+        return text.replace("\r", "").replace("\n", " ⏎ ")
+    return text
+
+
+class ModLibraryView(tk.Frame):
+    """Mod library drawn on ONE canvas.
+
+    The old implementation built ~15 CustomTkinter widgets per card and rebuilt all of them on every
+    search keystroke, filter click, language switch and mod load. A card is now ~12 canvas items and a
+    full redraw takes a few milliseconds even for hundreds of mods.
+    """
+
+    def __init__(self, master, on_open, scale=1.0):
+        super().__init__(master, bg=Theme.PANEL, bd=0, highlightthickness=0)
+        self.on_open = on_open
+        self.k = scale
+        fam = "Segoe UI"
+        self.f_name = tkfont.Font(family=fam, size=-int(13 * scale), weight="bold")
+        self.f_meta = tkfont.Font(family=fam, size=-int(11 * scale))
+        self.f_pill = tkfont.Font(family=fam, size=-int(10 * scale), weight="bold")
+        self.f_msg = tkfont.Font(family=fam, size=-int(12 * scale))
+
+        self.canvas = tk.Canvas(self, bg=Theme.PANEL, bd=0, highlightthickness=0, yscrollincrement=int(24 * scale))
+        self.scroll = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.canvas.yview, style="Crowdin.Vertical.TScrollbar")
+        self.canvas.configure(yscrollcommand=self.scroll.set)
+        self.scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.mods = []
+        self.active = None
+        self.message = ("", "")
+        self._rects = []
+        self._hover = -1
+        self._redraw_job = None
+        self._card_h = self.s(72)
+        self._gap = self.s(8)
+        self._pad = self.s(10)
+        self._last_w = 0
+
+        self.canvas.bind("<Configure>", self._on_resize)
+        self.canvas.bind("<Motion>", self._on_motion)
+        self.canvas.bind("<Leave>", lambda e: self._set_hover(-1))
+        self.canvas.bind("<Button-1>", self._on_click)
+        self.canvas.bind("<MouseWheel>", self._on_wheel)
+
+    def s(self, v):
+        return int(v * self.k)
+
+    # ---- data ----
+    def set_mods(self, mods, active_norm=None):
+        self.mods = mods
+        self.active = active_norm
+        self.redraw()
+
+    def set_active(self, active_norm):
+        if active_norm != self.active:
+            self.active = active_norm
+            self.redraw()
+
+    def set_message(self, title, hint=""):
+        self.mods = []
+        self.message = (title, hint)
+        self.redraw()
+
+    # ---- drawing ----
+    def _on_resize(self, event):
+        if abs(event.width - self._last_w) < 2:
+            return
+        self._last_w = event.width
+        if self._redraw_job:
+            try: self.after_cancel(self._redraw_job)
+            except Exception: pass
+        self._redraw_job = self.after(60, self.redraw)
+
+    def _round_rect(self, x1, y1, x2, y2, r, **kw):
+        pts = [x1 + r, y1, x1 + r, y1, x2 - r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y1 + r, x2, y2 - r,
+               x2, y2 - r, x2, y2, x2 - r, y2, x2 - r, y2, x1 + r, y2, x1 + r, y2, x1, y2, x1, y2 - r,
+               x1, y2 - r, x1, y1 + r, x1, y1 + r, x1, y1]
+        return self.canvas.create_polygon(pts, smooth=True, **kw)
+
+    def _pill(self, x, y, text, kind, anchor="w"):
+        fill, border, fg = Theme.PILLS[kind]
+        h = self.s(17)
+        w = self.f_pill.measure(text) + self.s(14)
+        x0 = x - w if anchor == "e" else x
+        self._round_rect(x0, y, x0 + w, y + h, h // 2, fill=fill, outline=border, width=1)
+        self.canvas.create_text(x0 + w / 2, y + h / 2, text=text, font=self.f_pill, fill=fg)
+        return w
+
+    def _fit(self, text, font, max_w):
+        if max_w <= 0:
+            return ""
+        if font.measure(text) <= max_w:
+            return text
+        lo, hi = 0, len(text)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if font.measure(text[:mid] + "…") <= max_w:
+                lo = mid
+            else:
+                hi = mid - 1
+        return text[:lo] + "…"
+
+    def redraw(self):
+        self._redraw_job = None
+        c = self.canvas
+        c.delete("all")
+        self._rects = []
+        self._hover = -1
+        w = max(c.winfo_width(), self.s(220))
+
+        if not self.mods:
+            title, hint = self.message
+            if title:
+                c.create_text(w / 2, self.s(40), text=title, fill=Theme.MUTED, font=self.f_msg,
+                              width=w - self.s(40), justify="center", anchor="n")
+            if hint:
+                c.create_text(w / 2, self.s(72), text=hint, fill=Theme.DIM, font=self.f_meta,
+                              width=w - self.s(40), justify="center", anchor="n")
+            c.configure(scrollregion=(0, 0, w, self.s(160)))
+            c.yview_moveto(0)
+            return
+
+        x1, x2 = self._pad, w - self._pad
+        for i, m in enumerate(self.mods):
+            y1 = self._pad + i * (self._card_h + self._gap)
+            y2 = y1 + self._card_h
+            active = m.get("_norm") == self.active
+            rect = self._round_rect(x1, y1, x2, y2, self.s(8),
+                                    fill=Theme.CARD_ACTIVE if active else Theme.CARD,
+                                    outline=Theme.ACCENT_LIGHT if active else Theme.BORDER, width=1)
+            self._rects.append((rect, active))
+            if active:
+                c.create_rectangle(x1 + 1, y1 + self.s(12), x1 + self.s(4), y2 - self.s(12),
+                                   fill=Theme.ACCENT_LIGHT, outline="")
+
+            px = x1 + self.s(12)
+            py = y1 + self.s(10)
+            px += self._pill(px, py, "Steam" if m["source"] == "Workshop" else "Mods",
+                             "steam" if m["source"] == "Workshop" else "mods") + self.s(5)
+            self._pill(px, py, "CSV" if m["has_csv"] else "DLL", "csv" if m["has_csv"] else "dll")
+
+            if m.get("has_update"):
+                self._pill(x2 - self.s(10), py, f"🔄 Update v{m['version']}", "update", anchor="e")
+            elif m.get("matched_installed") or m["source"] == "Game Mods":
+                self._pill(x2 - self.s(10), py, t("badge_installed"), "installed", anchor="e")
+
+            tx = x1 + self.s(12)
+            max_w = x2 - tx - self.s(10)
+            c.create_text(tx, y1 + self.s(40), anchor="w", font=self.f_name,
+                          fill="#ffffff" if active else Theme.TEXT_SOFT,
+                          text=self._fit(m["name"], self.f_name, max_w))
+            if m.get("has_update") and m.get("installed_ver"):
+                sub, sub_color = f"v{m['installed_ver']}  →  v{m['version']}", Theme.WARN
+            else:
+                sub = f"v{m['version']}"
+                if m.get("author") and m["author"] != "Unknown":
+                    sub += f"  •  {m['author']}"
+                sub_color = Theme.MUTED
+            c.create_text(tx, y1 + self.s(58), anchor="w", font=self.f_meta, fill=sub_color,
+                          text=self._fit(sub, self.f_meta, max_w))
+
+        total = self._pad * 2 + len(self.mods) * self._card_h + (len(self.mods) - 1) * self._gap
+        c.configure(scrollregion=(0, 0, w, total))
+
+    # ---- interaction ----
+    def _index_at(self, y_canvas):
+        step = self._card_h + self._gap
+        rel = y_canvas - self._pad
+        if rel < 0:
+            return -1
+        i = int(rel // step)
+        if i >= len(self.mods) or rel - i * step > self._card_h:
+            return -1
+        return i
+
+    def _set_hover(self, i):
+        if i == self._hover:
+            return
+        c = self.canvas
+        old = self._hover
+        if 0 <= old < len(self._rects):
+            rect, active = self._rects[old]
+            c.itemconfigure(rect, fill=Theme.CARD_ACTIVE if active else Theme.CARD)
+        if 0 <= i < len(self._rects):
+            rect, active = self._rects[i]
+            if not active:
+                c.itemconfigure(rect, fill=Theme.CARD_HOVER)
+        c.configure(cursor="hand2" if i >= 0 else "")
+        self._hover = i
+
+    def _on_motion(self, e):
+        self._set_hover(self._index_at(self.canvas.canvasy(e.y)))
+
+    def _on_click(self, e):
+        i = self._index_at(self.canvas.canvasy(e.y))
+        if i >= 0:
+            self.on_open(self.mods[i]["path"])
+
+    def _on_wheel(self, e):
+        first, last = self.canvas.yview()
+        if first <= 0.0 and last >= 1.0:
+            return
+        self.canvas.yview_scroll(-3 if e.delta > 0 else 3, "units")
+        self._set_hover(self._index_at(self.canvas.canvasy(e.y)))
+
+
 class ModernTranslatorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -1473,10 +1871,16 @@ class ModernTranslatorApp(ctk.CTk):
             try: self.iconbitmap(ICON_FILE)
             except Exception: pass
 
+        try:
+            self.k = max(1.0, float(self.winfo_fpixels("1i")) / 96.0)
+        except Exception:
+            self.k = 1.0
+
         self.project = None
         self.installed_mods = []
         self.selected_item_id = None
         self.current_filter = "all"
+        self.lib_filter = "all"
         self.show_library = self.cfg.get("show_library", True)
         self.translation_engine = self.cfg.get("engine", "google")
         self.deepl_key = self.cfg.get("deepl_api_key", "")
@@ -1487,14 +1891,105 @@ class ModernTranslatorApp(ctk.CTk):
         self.custom_model = self.cfg.get("custom_api_model", "gpt-4o-mini")
 
         self.cancel_translation_flag = False
+        self.active_suggestions = []
 
+        # runtime state
+        self._jobs = {}            # debounce timers by key
+        self._filter_gen = 0       # invalidates stale chunked table inserts
+        self._load_token = 0       # invalidates stale background mod loads
+        self._scan_token = 0
+        self._toast_job = None
+        self._busy_count = 0
+        self._dirty = False
+        self._project_lang = "ru"
+        self._draft_cache = {}
+        self._draft_pending = set()
+        self._lib_query_cache = None
+
+        self._make_fonts()
         self._init_ttk_styles()
         self._build_top_bar()
+        self._build_status_bar()      # packed BOTTOM before the main area so it is never squeezed out
         self._build_main_layout()
-        self._build_status_bar()
 
+        self.update_idletasks()
         setup_native_drag_and_drop(self, self.on_files_dropped)
-        self.after(80, self.refresh_mod_library)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.after(50, self.refresh_mod_library)
+
+    # -------------------------------------------------------------
+    # Helpers
+    # -------------------------------------------------------------
+
+    def _make_fonts(self):
+        ff = "Segoe UI"
+        self.F = {
+            "btn": ctk.CTkFont(family=ff, size=12, weight="bold"),
+            "reg": ctk.CTkFont(family=ff, size=12),
+            "small": ctk.CTkFont(family=ff, size=11),
+            "small_b": ctk.CTkFont(family=ff, size=11, weight="bold"),
+            "tiny": ctk.CTkFont(family=ff, size=10),
+            "tiny_b": ctk.CTkFont(family=ff, size=10, weight="bold"),
+            "title": ctk.CTkFont(family=ff, size=14, weight="bold"),
+            "mono": ctk.CTkFont(family="Consolas", size=10),
+        }
+        # plain-tk fonts (pooled widgets): explicit pixel sizes scaled for DPI
+        self.tkF = {
+            "sugg": tkfont.Font(family=ff, size=-int(13 * self.k), weight="bold"),
+            "sugg_src": tkfont.Font(family=ff, size=-int(11 * self.k)),
+            "sugg_hdr": tkfont.Font(family=ff, size=-int(11 * self.k), weight="bold"),
+            "kbd": tkfont.Font(family="Consolas", size=-int(11 * self.k)),
+            "chip": tkfont.Font(family="Consolas", size=-int(11 * self.k)),
+            "empty_t": tkfont.Font(family=ff, size=-int(20 * self.k), weight="bold"),
+            "empty_s": tkfont.Font(family=ff, size=-int(13 * self.k)),
+        }
+
+    def _mk_btn(self, parent, text, command, kind="ghost", width=None, height=34, font="btn", **kw):
+        fg, hover = Theme.BTN[kind]
+        opts = dict(text=text, height=height, font=self.F[font], fg_color=fg, hover_color=hover,
+                    corner_radius=8, cursor="hand2", command=command)
+        if width:
+            opts["width"] = width
+        opts.update(kw)
+        return ctk.CTkButton(parent, **opts)
+
+    def _debounce(self, key, ms, fn):
+        job = self._jobs.get(key)
+        if job:
+            try: self.after_cancel(job)
+            except Exception: pass
+        self._jobs[key] = self.after(ms, fn)
+
+    def _set_busy(self, on, text=None):
+        """Reference-counted busy indicator (indeterminate bar in the status bar)."""
+        self._busy_count = max(0, self._busy_count + (1 if on else -1))
+        if self._busy_count > 0:
+            if text:
+                self.status_lbl.configure(text=text, text_color=Theme.ACCENT_LIGHT)
+            if not self.busy_bar.winfo_ismapped():
+                self.busy_bar.pack(side=tk.LEFT, padx=(0, 12))
+                self.busy_bar.start()
+        else:
+            self.busy_bar.stop()
+            self.busy_bar.pack_forget()
+
+    def toast_show(self, msg, level="info", duration_ms=2500):
+        prefix = {"success": "✓ ", "warning": "⚠️ ", "error": "❌ "}.get(level, "ℹ️ ")
+        color = {"success": Theme.OK, "warning": Theme.WARN, "error": Theme.ERR}.get(level, Theme.ACCENT_LIGHT)
+        self.status_lbl.configure(text=prefix + msg, text_color=color)
+        if self._toast_job:
+            try: self.after_cancel(self._toast_job)
+            except Exception: pass
+        self._toast_job = self.after(duration_ms, lambda: self.status_lbl.configure(text_color=Theme.MUTED))
+
+    def _on_close(self):
+        try: self._autosave()
+        except Exception: pass
+        self.destroy()
+
+    # -------------------------------------------------------------
+    # Styles
+    # -------------------------------------------------------------
 
     def _init_ttk_styles(self):
         self.style = ttk.Style()
@@ -1505,17 +2000,17 @@ class ModernTranslatorApp(ctk.CTk):
 
         self.style.configure(
             "Crowdin.Treeview",
-            background="#0f172a",
-            foreground="#f8fafc",
-            rowheight=34,
-            fieldbackground="#0f172a",
+            background=Theme.PANEL,
+            foreground=Theme.TEXT,
+            rowheight=int(34 * self.k),
+            fieldbackground=Theme.PANEL,
             font=("Segoe UI", 10),
             borderwidth=0,
             highlightthickness=0,
             relief="flat",
-            bordercolor="#0f172a",
-            lightcolor="#0f172a",
-            darkcolor="#0f172a"
+            bordercolor=Theme.PANEL,
+            lightcolor=Theme.PANEL,
+            darkcolor=Theme.PANEL
         )
         self.style.map(
             "Crowdin.Treeview",
@@ -1525,226 +2020,110 @@ class ModernTranslatorApp(ctk.CTk):
         self.style.configure(
             "Crowdin.Treeview.Heading",
             background="#131b2c",
-            foreground="#94a3b8",
+            foreground=Theme.MUTED,
             font=("Segoe UI", 10, "bold"),
             relief="flat",
             borderwidth=0,
             bordercolor="#131b2c",
             padding=(8, 8)
         )
-        self.style.map("Crowdin.Treeview.Heading", background=[("active", "#1e293b")])
+        self.style.map("Crowdin.Treeview.Heading", background=[("active", Theme.FIELD)])
 
         self.style.configure(
             "Crowdin.Vertical.TScrollbar",
             gripcount=0,
             background="#334155",
-            troughcolor="#0f172a",
-            bordercolor="#0f172a",
-            arrowcolor="#94a3b8",
+            troughcolor=Theme.PANEL,
+            bordercolor=Theme.PANEL,
+            arrowcolor=Theme.MUTED,
             relief="flat",
             borderwidth=0,
             arrowsize=11
         )
         self.style.map(
             "Crowdin.Vertical.TScrollbar",
-            background=[("active", "#475569"), ("pressed", "#0284c7")],
+            background=[("active", "#475569"), ("pressed", Theme.ACCENT)],
             arrowcolor=[("active", "#ffffff")]
         )
 
+    # -------------------------------------------------------------
+    # Top bar
+    # -------------------------------------------------------------
+
     def _build_top_bar(self):
-        self.top_bar = ctk.CTkFrame(self, fg_color="#111827", height=58, corner_radius=0)
+        self.top_bar = ctk.CTkFrame(self, fg_color=Theme.BAR, height=58, corner_radius=0)
         self.top_bar.pack(side=tk.TOP, fill=tk.X)
         self.top_bar.pack_propagate(False)
 
-        # 1. Left Cluster
-        left_grp = ctk.CTkFrame(self.top_bar, fg_color="transparent")
-        left_grp.pack(side=tk.LEFT, padx=12, pady=10)
-
-        self.btn_toggle_lib = ctk.CTkButton(
-            left_grp,
-            text=t("btn_mods", count=0),
-            width=115,
-            height=34,
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            fg_color="#1e293b",
-            hover_color="#334155",
-            cursor="hand2",
-            command=self.toggle_library
-        )
-        self.btn_toggle_lib.pack(side=tk.LEFT, padx=(0, 6))
-        CTooltip(self.btn_toggle_lib, lambda: t("tooltip_mods"))
-
-        self.btn_browse = ctk.CTkButton(
-            left_grp,
-            text=t("btn_browse"),
-            width=90,
-            height=34,
-            font=ctk.CTkFont(family="Segoe UI", size=12),
-            fg_color="#1e293b",
-            hover_color="#334155",
-            cursor="hand2",
-            command=self.browse_mod_folder
-        )
-        self.btn_browse.pack(side=tk.LEFT, padx=4)
-        CTooltip(self.btn_browse, lambda: t("tooltip_browse"))
-
-        self.mod_badge = ctk.CTkLabel(
-            left_grp,
-            text="",
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color="#38bdf8"
-        )
-        self.mod_badge.pack(side=tk.LEFT, padx=10)
-
-        # 2. Right Action Cluster
+        # Right cluster is packed first so it always keeps its room; the left cluster shrinks instead.
         right_grp = ctk.CTkFrame(self.top_bar, fg_color="transparent")
         right_grp.pack(side=tk.RIGHT, padx=12, pady=10)
 
-        self.btn_install = ctk.CTkButton(
-            right_grp,
-            text=t("btn_install"),
-            width=135,
-            height=34,
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            fg_color="#2563eb",
-            hover_color="#1d4ed8",
-            cursor="hand2",
-            command=self.do_install
-        )
+        self.btn_install = self._mk_btn(right_grp, t("btn_install"), self.do_install, "primary", width=135)
         self.btn_install.pack(side=tk.RIGHT, padx=(6, 0))
         CTooltip(self.btn_install, lambda: t("tooltip_install"))
 
-        self.btn_build = ctk.CTkButton(
-            right_grp,
-            text=t("btn_build"),
-            width=95,
-            height=34,
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            fg_color="#0891b2",
-            hover_color="#0e7490",
-            cursor="hand2",
-            command=self.do_build
-        )
+        self.btn_build = self._mk_btn(right_grp, t("btn_build"), self.do_build, "info", width=95)
         self.btn_build.pack(side=tk.RIGHT, padx=4)
         CTooltip(self.btn_build, lambda: t("tooltip_build"))
 
-        self.btn_translate = ctk.CTkButton(
-            right_grp,
-            text=t("btn_auto_translate"),
-            width=125,
-            height=34,
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            fg_color="#16a34a",
-            hover_color="#15803d",
-            cursor="hand2",
-            command=self.start_auto_translate
-        )
+        self.btn_translate = self._mk_btn(right_grp, t("btn_auto_translate"), self.start_auto_translate, "success", width=125)
         self.btn_translate.pack(side=tk.RIGHT, padx=4)
         CTooltip(self.btn_translate, lambda: t("tooltip_auto_trans"))
 
-        engine_label = self.translation_engine.upper()
-        self.btn_engine = ctk.CTkButton(
-            right_grp,
-            text=f"🌐 {engine_label}",
-            width=100,
-            height=34,
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            fg_color="#1e293b",
-            hover_color="#334155",
-            cursor="hand2",
-            command=self.open_engine_settings
-        )
+        self.btn_engine = self._mk_btn(right_grp, f"🌐 {self.translation_engine.upper()}", self.open_engine_settings,
+                                       "ghost", width=100, font="small")
         self.btn_engine.pack(side=tk.RIGHT, padx=6)
         CTooltip(self.btn_engine, lambda: t("tooltip_engine"))
 
-        # Target language selector with renamed label: "Целевой язык:"
         lang_frame = ctk.CTkFrame(right_grp, fg_color="transparent")
         lang_frame.pack(side=tk.RIGHT, padx=6)
 
-        self.lbl_target_lang = ctk.CTkLabel(
-            lang_frame,
-            text=t("target_lang_label"),
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color="#94a3b8"
-        )
+        self.lbl_target_lang = ctk.CTkLabel(lang_frame, text=t("target_lang_label"), font=self.F["small_b"], text_color=Theme.MUTED)
         self.lbl_target_lang.pack(side=tk.LEFT, padx=(0, 4))
 
-        self.lang_var = ctk.StringVar(value="Russian [ru]")
+        saved_code = self.cfg.get("target_lang", "ru")
+        initial = next((f"{n} [{c}]" for n, c in LANGUAGES if c == saved_code), "Russian [ru]")
+        self.lang_var = ctk.StringVar(value=initial)
         self.lang_menu = ctk.CTkOptionMenu(
-            lang_frame,
-            variable=self.lang_var,
-            values=[f"{name} [{code}]" for name, code in LANGUAGES],
-            width=135,
-            height=34,
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            fg_color="#1e293b",
-            button_color="#334155",
+            lang_frame, variable=self.lang_var, values=[f"{name} [{code}]" for name, code in LANGUAGES],
+            width=135, height=34, font=self.F["small"], fg_color=Theme.FIELD, button_color="#334155",
             command=self.on_lang_changed
         )
         self.lang_menu.pack(side=tk.LEFT)
         CTooltip(self.lang_menu, lambda: t("tooltip_lang"))
 
-        # UI Language Switcher (RU / EN toggle button)
-        ui_lang_frame = ctk.CTkFrame(right_grp, fg_color="#1e293b", corner_radius=6)
+        ui_lang_frame = ctk.CTkFrame(right_grp, fg_color=Theme.FIELD, corner_radius=8)
         ui_lang_frame.pack(side=tk.RIGHT, padx=(0, 8))
 
         self.btn_ui_ru = ctk.CTkButton(
-            ui_lang_frame,
-            text="🇷🇺 RU",
-            width=48,
-            height=30,
-            font=ctk.CTkFont(size=10, weight="bold"),
-            fg_color="#0284c7" if CURRENT_UI_LANG == "ru" else "transparent",
-            hover_color="#0369a1",
-            cursor="hand2",
-            command=lambda: self.switch_ui_lang("ru")
+            ui_lang_frame, text="🇷🇺 RU", width=52, height=30, font=self.F["tiny_b"], corner_radius=6,
+            fg_color=Theme.ACCENT if CURRENT_UI_LANG == "ru" else "transparent", hover_color="#0369a1",
+            cursor="hand2", command=lambda: self.switch_ui_lang("ru")
         )
-        self.btn_ui_ru.pack(side=tk.LEFT, padx=1, pady=1)
+        self.btn_ui_ru.pack(side=tk.LEFT, padx=2, pady=2)
 
         self.btn_ui_en = ctk.CTkButton(
-            ui_lang_frame,
-            text="🇬🇧 EN",
-            width=48,
-            height=30,
-            font=ctk.CTkFont(size=10, weight="bold"),
-            fg_color="#0284c7" if CURRENT_UI_LANG == "en" else "transparent",
-            hover_color="#0369a1",
-            cursor="hand2",
-            command=lambda: self.switch_ui_lang("en")
+            ui_lang_frame, text="🇬🇧 EN", width=52, height=30, font=self.F["tiny_b"], corner_radius=6,
+            fg_color=Theme.ACCENT if CURRENT_UI_LANG == "en" else "transparent", hover_color="#0369a1",
+            cursor="hand2", command=lambda: self.switch_ui_lang("en")
         )
-        self.btn_ui_en.pack(side=tk.LEFT, padx=1, pady=1)
+        self.btn_ui_en.pack(side=tk.LEFT, padx=2, pady=2)
         CTooltip(ui_lang_frame, lambda: t("tooltip_ui_lang"))
 
-        # 3. Dedicated Top-Bar Auto-Translate Live Progress Bar (Requested in Image 1!)
-        self.top_progress_frame = ctk.CTkFrame(self.top_bar, width=370, height=34, fg_color="#182234", corner_radius=8, border_width=1, border_color="#0284c7")
-        self.top_progress_frame.pack_propagate(False)
-        self.top_progress_lbl = ctk.CTkLabel(
-            self.top_progress_frame,
-            text="✨ Автоперевод...",
-            width=180,
-            anchor="w",
-            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
-            text_color="#f8fafc"
-        )
-        self.top_progress_lbl.pack(side=tk.LEFT, padx=(10, 8))
+        left_grp = ctk.CTkFrame(self.top_bar, fg_color="transparent")
+        left_grp.pack(side=tk.LEFT, padx=12, pady=10)
 
-        self.top_progress_bar = ctk.CTkProgressBar(self.top_progress_frame, width=170, height=8, fg_color="#0f172a", progress_color="#10b981")
-        self.top_progress_bar.pack(side=tk.LEFT, padx=4)
-        self.top_progress_bar.set(0)
+        self.btn_toggle_lib = self._mk_btn(left_grp, t("btn_mods", count=0), self.toggle_library, "ghost", width=115)
+        self.btn_toggle_lib.pack(side=tk.LEFT, padx=(0, 6))
+        CTooltip(self.btn_toggle_lib, lambda: t("tooltip_mods"))
 
-        self.btn_top_cancel = ctk.CTkButton(
-            self.top_progress_frame,
-            text="⏹",
-            width=28,
-            height=24,
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#dc2626",
-            hover_color="#b91c1c",
-            cursor="hand2",
-            command=self.cancel_auto_translate
-        )
-        self.btn_top_cancel.pack(side=tk.LEFT, padx=(6, 8))
-        CTooltip(self.btn_top_cancel, "Остановить автоперевод")
+        self.btn_browse = self._mk_btn(left_grp, t("btn_browse"), self.browse_mod_folder, "ghost", width=90, font="reg")
+        self.btn_browse.pack(side=tk.LEFT, padx=4)
+        CTooltip(self.btn_browse, lambda: t("tooltip_browse"))
+
+        self.mod_badge = ctk.CTkLabel(left_grp, text="", font=self.F["small_b"], text_color=Theme.ACCENT_LIGHT)
+        self.mod_badge.pack(side=tk.LEFT, padx=10)
 
     def switch_ui_lang(self, lang_code):
         global CURRENT_UI_LANG
@@ -1752,8 +2131,8 @@ class ModernTranslatorApp(ctk.CTk):
         self.cfg["ui_lang"] = lang_code
         save_app_config(self.cfg)
 
-        self.btn_ui_ru.configure(fg_color="#0284c7" if CURRENT_UI_LANG == "ru" else "transparent")
-        self.btn_ui_en.configure(fg_color="#0284c7" if CURRENT_UI_LANG == "en" else "transparent")
+        self.btn_ui_ru.configure(fg_color=Theme.ACCENT if lang_code == "ru" else "transparent")
+        self.btn_ui_en.configure(fg_color=Theme.ACCENT if lang_code == "en" else "transparent")
 
         self.title(t("app_title"))
         self.btn_toggle_lib.configure(text=t("btn_mods", count=len(self.installed_mods)))
@@ -1763,86 +2142,70 @@ class ModernTranslatorApp(ctk.CTk):
         self.btn_translate.configure(text=t("btn_auto_translate"))
         self.lbl_target_lang.configure(text=t("target_lang_label"))
 
-        # Mod Library controls
-        if hasattr(self, "lbl_lib_title"):
-            self.lbl_lib_title.configure(text=t("mod_lib_title"))
-        if hasattr(self, "lib_search_entry"):
-            self.lib_search_entry.configure(placeholder_text=t("search_mods_placeholder"))
-        if hasattr(self, "btn_cat_all"):
-            self.btn_cat_all.configure(text=t("filter_all"))
-        if hasattr(self, "btn_cat_ws"):
-            self.btn_cat_ws.configure(text=t("filter_workshop"))
-        if hasattr(self, "btn_cat_mods"):
-            self.btn_cat_mods.configure(text=t("filter_mods"))
+        # Mod library
+        self.lbl_lib_title.configure(text=t("mod_lib_title"))
+        self.lib_search_entry.configure(placeholder_text=t("search_mods_placeholder"))
+        self.btn_cat_all.configure(text=t("filter_all"))
+        self.btn_cat_ws.configure(text=t("filter_workshop"))
+        self.btn_cat_mods.configure(text=t("filter_mods"))
+        self.render_library()
 
-        # Central Table headings & search
+        # Table
         self.tree.heading("type", text=t("col_type"))
         self.tree.heading("original", text=t("col_original"))
         self.tree.heading("translation", text=t("col_translation"))
         self.tree.heading("status", text=t("col_status"))
-
-        if hasattr(self, "search_entry"):
-            self.search_entry.configure(placeholder_text=t("search_strings_placeholder"))
+        self.search_entry.configure(placeholder_text=t("search_strings_placeholder"))
         self.btn_filter_all.configure(text=t("filter_all"))
-        self.btn_filter_untrans.configure(text=t("filter_untrans"))
-        self.btn_filter_overflow.configure(text=t("filter_overflow"))
-        self.btn_filter_diff.configure(text=t("filter_diff"))
         self.btn_sort_new.configure(text=t("btn_new_to_top"))
+        self.empty_title_lbl.configure(text=t("empty_title"))
+        self.empty_sub_lbl.configure(text=t("empty_sub"))
 
-        # Right Workspace
+        # Right workspace
         self.ws_context_title.configure(text=t("context_title"))
         self.ws_orig_title.configure(text=t("orig_box_title"))
         self.ws_trans_title.configure(text=t("trans_box_title"))
         self.ws_sugg_title.configure(text=t("suggestions_title"))
-        if hasattr(self, "btn_concise"):
-            self.btn_concise.configure(text=t("btn_concise_action"))
-        if hasattr(self, "btn_request_ai"):
-            self.update_ai_btn_text()
+        self.btn_concise.configure(text=t("btn_concise_action"))
+        self.update_ai_btn_text()
         self.btn_save_next.configure(text=t("btn_save_next"))
-        if hasattr(self, "btn_row_orig"):
-            self.btn_row_orig.configure(text=t("btn_copy_orig"))
-        if hasattr(self, "btn_row_clear"):
-            self.btn_row_clear.configure(text=t("btn_clear_row"))
-        if hasattr(self, "btn_concise_sec"):
-            self.btn_concise_sec.configure(text=t("btn_concise"))
-        if hasattr(self, "btn_nav_prev"):
-            self.btn_nav_prev.configure(text=t("nav_prev"))
-        if hasattr(self, "btn_nav_next"):
-            self.btn_nav_next.configure(text=t("nav_next"))
-
-        # Re-render active cards, filters and status
-        self.render_mod_cards()
-        self.apply_filter()
+        self.btn_row_orig.configure(text=t("btn_copy_orig"))
+        self.btn_row_clear.configure(text=t("btn_clear_row"))
+        self.btn_concise_sec.configure(text=t("btn_concise"))
+        self.btn_nav_prev.configure(text=t("nav_prev"))
+        self.btn_nav_next.configure(text=t("nav_next"))
+        self.hotkeys_lbl.configure(text=t("legend_hotkeys"))
+        self.ws_meta_lbl.configure(text=f"{t('meta_file_prefix')} -")
         self.update_stats()
+        self.apply_filter()
 
-        # Update right workspace labels if row is active
-        if hasattr(self, "selected_item_id") and self.selected_item_id:
-            orig = self.ws_orig_box.get("1.0", tk.END).strip()
-            trans = self.ws_trans_box.get("1.0", tk.END).strip()
-            self._on_translation_modified()
-            if orig:
-                self._render_crowdin_suggestions(orig, trans)
+        if self.selected_item_id is not None and self.project:
+            self._apply_selection(force=True)
+
+    # -------------------------------------------------------------
+    # Layout
+    # -------------------------------------------------------------
 
     def _build_main_layout(self):
-        self.main_container = ctk.CTkFrame(self, fg_color="#090d16", corner_radius=0)
+        self.main_container = ctk.CTkFrame(self, fg_color=Theme.BG, corner_radius=0)
         self.main_container.pack(fill=tk.BOTH, expand=True)
 
-        self.lib_frame = ctk.CTkFrame(self.main_container, fg_color="#0f172a", width=310, corner_radius=0)
+        self.lib_frame = ctk.CTkFrame(self.main_container, fg_color=Theme.PANEL, width=300, corner_radius=0)
+        self.lib_frame.pack_propagate(False)
         if self.show_library:
             self.lib_frame.pack(side=tk.LEFT, fill=tk.Y)
-            self.lib_frame.pack_propagate(False)
 
         self._build_library_panel()
 
-        self.center_frame = ctk.CTkFrame(self.main_container, fg_color="#0b1120", corner_radius=0, border_width=0)
-        self.center_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        self._build_table_panel()
-
-        self.right_workspace = ctk.CTkFrame(self.main_container, fg_color="#0f172a", width=460, corner_radius=0)
+        # Right workspace is packed before the center so the table never pushes it out of the window.
+        self.right_workspace = ctk.CTkFrame(self.main_container, fg_color=Theme.PANEL, width=430, corner_radius=0)
         self.right_workspace.pack(side=tk.RIGHT, fill=tk.BOTH)
         self.right_workspace.pack_propagate(False)
 
+        self.center_frame = ctk.CTkFrame(self.main_container, fg_color=Theme.CENTER, corner_radius=0, border_width=0)
+        self.center_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self._build_table_panel()
         self._build_crowdin_workspace()
 
     def _build_library_panel(self):
@@ -1850,88 +2213,69 @@ class ModernTranslatorApp(ctk.CTk):
         hdr.pack(fill=tk.X, padx=12, pady=(10, 4))
         hdr.pack_propagate(False)
 
-        self.lbl_lib_title = ctk.CTkLabel(
-            hdr,
-            text=t("mod_lib_title"),
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color="#94a3b8"
-        )
+        self.lbl_lib_title = ctk.CTkLabel(hdr, text=t("mod_lib_title"), font=self.F["small_b"], text_color=Theme.MUTED)
         self.lbl_lib_title.pack(side=tk.LEFT)
 
-        btn_refresh = ctk.CTkButton(
-            hdr,
-            text="🔄",
-            width=28,
-            height=28,
-            font=ctk.CTkFont(size=12),
-            fg_color="#1e293b",
-            hover_color="#334155",
-            cursor="hand2",
-            command=self.refresh_mod_library
-        )
+        btn_refresh = self._mk_btn(hdr, "🔄", self.refresh_mod_library, "ghost", width=30, height=28, font="reg")
         btn_refresh.pack(side=tk.RIGHT)
-        CTooltip(btn_refresh, t("tooltip_refresh_mods"))
+        CTooltip(btn_refresh, lambda: t("tooltip_refresh_mods"))
 
         self.lib_search_entry = ctk.CTkEntry(
-            self.lib_frame,
-            placeholder_text=t("search_mods_placeholder"),
-            height=32,
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            fg_color="#1e293b",
-            border_color="#334155"
+            self.lib_frame, placeholder_text=t("search_mods_placeholder"), height=32, font=self.F["small"],
+            fg_color=Theme.FIELD, border_color="#334155"
         )
         self.lib_search_entry.pack(fill=tk.X, padx=12, pady=4)
-        self.lib_search_entry.bind("<KeyRelease>", lambda e: self.filter_library_cards())
+        self.lib_search_entry.bind("<KeyRelease>", lambda e: self._debounce("lsearch", 120, self.render_library))
 
         cat_bar = ctk.CTkFrame(self.lib_frame, fg_color="transparent")
         cat_bar.pack(fill=tk.X, padx=12, pady=4)
 
-        self.lib_filter = "all"
-        self.btn_cat_all = ctk.CTkButton(cat_bar, text=t("filter_all"), width=56, height=26, font=ctk.CTkFont(size=10), fg_color="#0284c7", command=lambda: self.set_lib_filter("all"))
+        self.btn_cat_all = self._mk_btn(cat_bar, t("filter_all"), lambda: self.set_lib_filter("all"), "primary", width=56, height=26, font="tiny")
+        self.btn_cat_all.configure(fg_color=Theme.ACCENT)
         self.btn_cat_all.pack(side=tk.LEFT, padx=1)
-        self.btn_cat_ws = ctk.CTkButton(cat_bar, text=t("filter_workshop"), width=76, height=26, font=ctk.CTkFont(size=10), fg_color="#1e293b", command=lambda: self.set_lib_filter("workshop"))
+        self.btn_cat_ws = self._mk_btn(cat_bar, t("filter_workshop"), lambda: self.set_lib_filter("workshop"), "ghost", width=76, height=26, font="tiny")
         self.btn_cat_ws.pack(side=tk.LEFT, padx=1)
-        self.btn_cat_mods = ctk.CTkButton(cat_bar, text=t("filter_mods"), width=56, height=26, font=ctk.CTkFont(size=10), fg_color="#1e293b", command=lambda: self.set_lib_filter("mods"))
+        self.btn_cat_mods = self._mk_btn(cat_bar, t("filter_mods"), lambda: self.set_lib_filter("mods"), "ghost", width=56, height=26, font="tiny")
         self.btn_cat_mods.pack(side=tk.LEFT, padx=1)
 
-        self.cards_scroll = ctk.CTkScrollableFrame(self.lib_frame, fg_color="transparent", corner_radius=0)
-        self.cards_scroll.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        self.lib_view = ModLibraryView(self.lib_frame, on_open=self.load_mod, scale=self.k)
+        self.lib_view.pack(fill=tk.BOTH, expand=True, padx=(6, 4), pady=6)
+        self.lib_view.set_message(t("lib_scanning"))
 
     def _build_table_panel(self):
-        filter_bar = ctk.CTkFrame(self.center_frame, fg_color="#111827", height=48, corner_radius=0)
-        filter_bar.pack(fill=tk.X, padx=0, pady=0)
-        filter_bar.pack_propagate(False)
+        filter_bar = ctk.CTkFrame(self.center_frame, fg_color=Theme.BAR, corner_radius=0)
+        filter_bar.pack(fill=tk.X)
 
-        self.search_entry = ctk.CTkEntry(
-            filter_bar,
-            placeholder_text=t("search_strings_placeholder"),
-            width=270,
-            height=32,
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            fg_color="#1e293b",
-            border_color="#334155"
-        )
-        self.search_entry.pack(side=tk.LEFT, padx=(12, 6), pady=8)
-        self.search_entry.bind("<KeyRelease>", lambda e: self.apply_filter())
+        row1 = ctk.CTkFrame(filter_bar, fg_color="transparent")
+        row1.pack(fill=tk.X, padx=12, pady=(10, 4))
 
-        self.btn_filter_all = ctk.CTkButton(filter_bar, text=t("filter_all"), width=50, height=28, font=ctk.CTkFont(size=11), fg_color="#0284c7", command=lambda: self.set_table_filter("all"))
-        self.btn_filter_all.pack(side=tk.LEFT, padx=2)
-
-        self.btn_filter_untrans = ctk.CTkButton(filter_bar, text=t("filter_untrans"), width=105, height=28, font=ctk.CTkFont(size=11), fg_color="#1e293b", command=lambda: self.set_table_filter("untranslated"))
-        self.btn_filter_untrans.pack(side=tk.LEFT, padx=2)
-
-        self.btn_filter_overflow = ctk.CTkButton(filter_bar, text=t("filter_overflow"), width=130, height=28, font=ctk.CTkFont(size=11), fg_color="#1e293b", command=lambda: self.set_table_filter("overflow"))
-        self.btn_filter_overflow.pack(side=tk.LEFT, padx=2)
-
-        self.btn_filter_diff = ctk.CTkButton(filter_bar, text=t("filter_diff"), width=125, height=28, font=ctk.CTkFont(size=11), fg_color="#1e293b", command=lambda: self.set_table_filter("diff"))
-        self.btn_filter_diff.pack(side=tk.LEFT, padx=2)
-
-        self.btn_sort_new = ctk.CTkButton(filter_bar, text=t("btn_new_to_top"), width=105, height=28, font=ctk.CTkFont(size=11), fg_color="#1e293b", hover_color="#334155", command=self.sort_new_to_top)
-        self.btn_sort_new.pack(side=tk.RIGHT, padx=(0, 12))
+        self.btn_sort_new = self._mk_btn(row1, t("btn_new_to_top"), self.sort_new_to_top, "ghost", width=110, height=30, font="small")
+        self.btn_sort_new.pack(side=tk.RIGHT, padx=(8, 0))
         CTooltip(self.btn_sort_new, lambda: t("tooltip_new_top"))
 
-        table_container = tk.Frame(self.center_frame, bg="#0f172a", bd=0, highlightthickness=0, relief="flat")
+        self.search_entry = ctk.CTkEntry(
+            row1, placeholder_text=t("search_strings_placeholder"), height=32, font=self.F["small"],
+            fg_color=Theme.FIELD, border_color="#334155"
+        )
+        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.search_entry.bind("<KeyRelease>", lambda e: self._debounce("tsearch", 180, self.apply_filter))
+
+        row2 = ctk.CTkFrame(filter_bar, fg_color="transparent")
+        row2.pack(fill=tk.X, padx=12, pady=(0, 10))
+
+        self.btn_filter_all = self._mk_btn(row2, t("filter_all"), lambda: self.set_table_filter("all"), "primary", width=50, height=28, font="small")
+        self.btn_filter_all.configure(fg_color=Theme.ACCENT)
+        self.btn_filter_all.pack(side=tk.LEFT, padx=(0, 4))
+        self.btn_filter_untrans = self._mk_btn(row2, t("filter_untrans"), lambda: self.set_table_filter("untranslated"), "ghost", width=105, height=28, font="small")
+        self.btn_filter_untrans.pack(side=tk.LEFT, padx=2)
+        self.btn_filter_overflow = self._mk_btn(row2, t("filter_overflow"), lambda: self.set_table_filter("overflow"), "ghost", width=130, height=28, font="small")
+        self.btn_filter_overflow.pack(side=tk.LEFT, padx=2)
+        self.btn_filter_diff = self._mk_btn(row2, t("filter_diff"), lambda: self.set_table_filter("diff"), "ghost", width=125, height=28, font="small")
+        self.btn_filter_diff.pack(side=tk.LEFT, padx=2)
+
+        table_container = tk.Frame(self.center_frame, bg=Theme.PANEL, bd=0, highlightthickness=0, relief="flat")
         table_container.pack(fill=tk.BOTH, expand=True)
+        self.table_container = table_container
 
         cols = ("#", "type", "original", "translation", "status")
         self.tree = ttk.Treeview(table_container, columns=cols, show="headings", style="Crowdin.Treeview", selectmode="browse")
@@ -1942,343 +2286,253 @@ class ModernTranslatorApp(ctk.CTk):
         self.tree.heading("translation", text=t("col_translation"))
         self.tree.heading("status", text=t("col_status"))
 
-        self.tree.column("#", width=45, minwidth=40, anchor="center")
-        self.tree.column("type", width=55, minwidth=50, anchor="center")
-        self.tree.column("original", width=260, minwidth=180)
-        self.tree.column("translation", width=260, minwidth=180)
-        self.tree.column("status", width=115, minwidth=100, anchor="center")
+        self.tree.column("#", width=int(48 * self.k), minwidth=40, anchor="center", stretch=False)
+        self.tree.column("type", width=int(58 * self.k), minwidth=50, anchor="center", stretch=False)
+        self.tree.column("original", width=int(240 * self.k), minwidth=120, stretch=True)
+        self.tree.column("translation", width=int(240 * self.k), minwidth=120, stretch=True)
+        self.tree.column("status", width=int(120 * self.k), minwidth=100, anchor="center", stretch=False)
 
         scroll_y = ttk.Scrollbar(table_container, orient=tk.VERTICAL, command=self.tree.yview, style="Crowdin.Vertical.TScrollbar")
         self.tree.configure(yscrollcommand=scroll_y.set)
 
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.tree.tag_configure("even", background="#0f172a", foreground="#f8fafc")
-        self.tree.tag_configure("odd", background="#131d33", foreground="#f8fafc")
+        self.tree.tag_configure("even", background=Theme.PANEL, foreground=Theme.TEXT)
+        self.tree.tag_configure("odd", background="#131d33", foreground=Theme.TEXT)
 
+        # Arrow keys already emit <<TreeviewSelect>>; the old extra <Up>/<Down> binds ran the heavy handler twice.
         self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
         self.tree.bind("<Button-3>", self.on_tree_right_click)
         self.tree.bind("<F2>", lambda e: self.focus_editor())
-        self.tree.bind("<Down>", lambda e: self.after(10, self.on_tree_select))
-        self.tree.bind("<Up>", lambda e: self.after(10, self.on_tree_select))
+
+        # Empty state (shown until a mod is loaded). Created now so Win32 drag&drop covers it too.
+        self.empty_state = tk.Frame(table_container, bg=Theme.PANEL)
+        self.empty_title_lbl = tk.Label(self.empty_state, text=t("empty_title"), bg=Theme.PANEL, fg=Theme.TEXT_SOFT, font=self.tkF["empty_t"])
+        self.empty_title_lbl.pack(pady=(0, 6))
+        self.empty_sub_lbl = tk.Label(self.empty_state, text=t("empty_sub"), bg=Theme.PANEL, fg=Theme.DIM, font=self.tkF["empty_s"], wraplength=int(380 * self.k), justify="center")
+        self.empty_sub_lbl.pack()
+        self._update_empty_state()
+
+    def _update_empty_state(self):
+        if self.project is None:
+            self.empty_state.place(relx=0.5, rely=0.45, anchor="center")
+            self.empty_state.lift()
+        else:
+            self.empty_state.place_forget()
 
     def _build_crowdin_workspace(self):
-        hdr = ctk.CTkFrame(self.right_workspace, fg_color="transparent", height=38)
+        ws = self.right_workspace
+
+        hdr = ctk.CTkFrame(ws, fg_color="transparent", height=38)
         hdr.pack(fill=tk.X, padx=12, pady=(8, 2))
         hdr.pack_propagate(False)
 
-        self.ws_context_title = ctk.CTkLabel(
-            hdr,
-            text=t("context_title"),
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color="#94a3b8"
-        )
+        self.ws_context_title = ctk.CTkLabel(hdr, text=t("context_title"), font=self.F["small_b"], text_color=Theme.MUTED)
         self.ws_context_title.pack(side=tk.LEFT)
 
-        self.ws_status_chip = ctk.CTkFrame(hdr, fg_color="#1e293b", corner_radius=6, border_width=1, border_color="#64748b")
+        self.ws_status_chip = ctk.CTkFrame(hdr, fg_color=Theme.FIELD, corner_radius=10, border_width=1, border_color="#64748b")
         self.ws_status_chip.pack(side=tk.RIGHT)
-        self.ws_status_badge = ctk.CTkLabel(
-            self.ws_status_chip,
-            text=t("badge_empty"),
-            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
-            text_color="#cbd5e1",
-            padx=8,
-            pady=2
-        )
+        self.ws_status_badge = ctk.CTkLabel(self.ws_status_chip, text=t("badge_empty"), font=self.F["tiny_b"], text_color="#cbd5e1", padx=8, pady=2)
         self.ws_status_badge.pack()
 
-        # 1. Original Text Card
-        orig_card = ctk.CTkFrame(self.right_workspace, fg_color="#182234", corner_radius=8, border_width=1, border_color="#1e293b")
+        # 1. Original text card
+        orig_card = ctk.CTkFrame(ws, fg_color=Theme.CARD, corner_radius=10, border_width=1, border_color=Theme.BORDER)
         orig_card.pack(fill=tk.X, padx=12, pady=4)
 
         orig_top = ctk.CTkFrame(orig_card, fg_color="transparent")
         orig_top.pack(fill=tk.X, padx=10, pady=(6, 2))
-
-        self.ws_orig_title = ctk.CTkLabel(orig_top, text=t("orig_box_title"), font=ctk.CTkFont(size=10, weight="bold"), text_color="#38bdf8")
+        self.ws_orig_title = ctk.CTkLabel(orig_top, text=t("orig_box_title"), font=self.F["tiny_b"], text_color=Theme.ACCENT_LIGHT)
         self.ws_orig_title.pack(side=tk.LEFT)
-
-        self.ws_orig_len_lbl = ctk.CTkLabel(orig_top, text=t("char_count", lang="cn", count=0), font=ctk.CTkFont(size=10), text_color="#94a3b8")
+        self.ws_orig_len_lbl = ctk.CTkLabel(orig_top, text=t("char_count", lang="cn", count=0), font=self.F["tiny"], text_color=Theme.MUTED)
         self.ws_orig_len_lbl.pack(side=tk.RIGHT)
 
-        self.ws_orig_box = ctk.CTkTextbox(
-            orig_card,
-            height=50,
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            fg_color="#0f172a",
-            text_color="#f8fafc",
-            wrap="word",
-            border_width=0
-        )
+        self.ws_orig_box = ctk.CTkTextbox(orig_card, height=56, font=self.F["small"], fg_color=Theme.PANEL, text_color=Theme.TEXT, wrap="word", border_width=0)
         self.ws_orig_box.pack(fill=tk.X, padx=8, pady=(0, 6))
         setup_textbox_clipboard(self.ws_orig_box, is_readonly=True)
 
-        # 2. UI Fit Card
-        self.ws_fit_card = ctk.CTkFrame(self.right_workspace, fg_color="#1e293b", corner_radius=6, border_width=1, border_color="#334155")
+        # 2. UI-fit card
+        self.ws_fit_card = ctk.CTkFrame(ws, fg_color=Theme.FIELD, corner_radius=8, border_width=1, border_color="#334155")
         self.ws_fit_card.pack(fill=tk.X, padx=12, pady=3)
 
         fit_inner = ctk.CTkFrame(self.ws_fit_card, fg_color="transparent")
         fit_inner.pack(fill=tk.X, padx=8, pady=4)
-
-        self.ws_meta_lbl = ctk.CTkLabel(fit_inner, text=f"{t('meta_file_prefix')} -", font=ctk.CTkFont(size=10), text_color="#64748b")
+        self.ws_meta_lbl = ctk.CTkLabel(fit_inner, text=f"{t('meta_file_prefix')} -", font=self.F["tiny"], text_color=Theme.DIM)
         self.ws_meta_lbl.pack(anchor="w")
 
-        self.ws_overflow_alert = ctk.CTkFrame(self.ws_fit_card, fg_color="#451a03", corner_radius=6, border_width=1, border_color="#b45309")
-        self.ws_overflow_alert_lbl = ctk.CTkLabel(
-            self.ws_overflow_alert,
-            text="",
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color="#fef3c7",
-            justify="left"
-        )
+        self.ws_overflow_alert = ctk.CTkFrame(self.ws_fit_card, fg_color="#451a03", corner_radius=8, border_width=1, border_color="#b45309")
+        self.ws_overflow_alert_lbl = ctk.CTkLabel(self.ws_overflow_alert, text="", font=self.F["small_b"], text_color="#fef3c7", justify="left", wraplength=int(230 * self.k))
         self.ws_overflow_alert_lbl.pack(side=tk.LEFT, padx=8, pady=4, fill=tk.X, expand=True)
-
-        self.btn_concise = ctk.CTkButton(
-            self.ws_overflow_alert,
-            text=t("btn_concise_action"),
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            fg_color="#d97706",
-            hover_color="#b45309",
-            cursor="hand2",
-            height=26,
-            command=self.apply_concise_suggestion
-        )
+        self.btn_concise = self._mk_btn(self.ws_overflow_alert, t("btn_concise_action"), self.apply_concise_suggestion, "warn", height=26, font="small_b")
         self.btn_concise.pack(side=tk.RIGHT, padx=6, pady=3)
+        self._alert_visible = False
 
-        # 3. Translation Editor Card
-        trans_card = ctk.CTkFrame(self.right_workspace, fg_color="#182234", corner_radius=8, border_width=1, border_color="#1e293b")
+        # 3. Translation editor card
+        trans_card = ctk.CTkFrame(ws, fg_color=Theme.CARD, corner_radius=10, border_width=1, border_color=Theme.BORDER)
         trans_card.pack(fill=tk.BOTH, expand=True, padx=12, pady=3)
 
         trans_top = ctk.CTkFrame(trans_card, fg_color="transparent")
         trans_top.pack(fill=tk.X, padx=10, pady=(6, 2))
-
-        self.ws_trans_title = ctk.CTkLabel(trans_top, text=t("trans_box_title"), font=ctk.CTkFont(size=10, weight="bold"), text_color="#10b981")
+        self.ws_trans_title = ctk.CTkLabel(trans_top, text=t("trans_box_title"), font=self.F["tiny_b"], text_color=Theme.OK)
         self.ws_trans_title.pack(side=tk.LEFT)
-
-        self.ws_trans_len_lbl = ctk.CTkLabel(trans_top, text=t("char_count", lang="RU", count=0), font=ctk.CTkFont(size=10), text_color="#94a3b8")
+        self.ws_trans_len_lbl = ctk.CTkLabel(trans_top, text=t("char_count", lang="RU", count=0), font=self.F["tiny"], text_color=Theme.MUTED)
         self.ws_trans_len_lbl.pack(side=tk.RIGHT)
 
-        self.chips_frame = ctk.CTkFrame(trans_card, fg_color="transparent", height=22)
+        # Placeholder chips: a fixed pool of lightweight labels (no widget churn per row).
+        self.chips_frame = tk.Frame(trans_card, bg=Theme.CARD, height=int(24 * self.k))
         self.chips_frame.pack(fill=tk.X, padx=8, pady=(1, 3))
+        self._chip_pool = []
+        for _ in range(8):
+            chip = tk.Label(self.chips_frame, text="", bg="#334155", fg=Theme.TEXT_SOFT, font=self.tkF["chip"], padx=6, pady=1, cursor="hand2")
+            chip._tok = ""
+            chip.bind("<Button-1>", lambda e, c=chip: self.insert_token(c._tok))
+            chip.bind("<Enter>", lambda e, c=chip: c.configure(bg=Theme.ACCENT))
+            chip.bind("<Leave>", lambda e, c=chip: c.configure(bg="#334155"))
+            CTooltip(chip, lambda c=chip: t("tooltip_insert_token", tok=c._tok))
+            self._chip_pool.append(chip)
 
-        self.ws_trans_box = ctk.CTkTextbox(
-            trans_card,
-            height=90,
-            font=ctk.CTkFont(family="Segoe UI", size=12),
-            fg_color="#0f172a",
-            text_color="#f8fafc",
-            wrap="word",
-            border_width=0
-        )
+        self.ws_trans_box = ctk.CTkTextbox(trans_card, height=90, font=self.F["reg"], fg_color=Theme.PANEL, text_color=Theme.TEXT, wrap="word", border_width=0)
         self.ws_trans_box.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 4))
         setup_textbox_clipboard(self.ws_trans_box, is_readonly=False, on_modify=self._on_translation_modified)
-        self.ws_trans_box.bind("<KeyRelease>", lambda e: self._on_translation_modified())
+        self.ws_trans_box.bind("<KeyRelease>", lambda e: self._debounce("modified", 40, self._on_translation_modified))
 
         self.ws_trans_box.bind("<Control-Return>", lambda e: self.save_and_next())
         self.ws_trans_box.bind("<Control-KP_Enter>", lambda e: self.save_and_next())
         self.ws_trans_box.bind("<Alt-Up>", lambda e: self.nav_prev())
         self.ws_trans_box.bind("<Alt-Down>", lambda e: self.nav_next())
-        self.ws_trans_box.bind("<Control-Key-1>", lambda e: self.apply_suggestion_by_index(0))
-        self.ws_trans_box.bind("<Control-Key-2>", lambda e: self.apply_suggestion_by_index(1))
+        for i in range(1, 6):
+            self.ws_trans_box.bind(f"<Control-Key-{i}>", lambda e, idx=i - 1: self.apply_suggestion_by_index(idx))
 
-        # 4. Crowdin Suggestions Panel (Interactive alternative variants)
-        self.suggestions_frame = ctk.CTkFrame(self.right_workspace, fg_color="#111827", corner_radius=8, border_width=1, border_color="#1e293b")
+        # 4. Suggestions panel (pooled rows)
+        self.suggestions_frame = ctk.CTkFrame(ws, fg_color=Theme.BAR, corner_radius=10, border_width=1, border_color=Theme.BORDER)
         self.suggestions_frame.pack(fill=tk.X, padx=12, pady=3)
 
         sugg_top = ctk.CTkFrame(self.suggestions_frame, fg_color="transparent")
         sugg_top.pack(fill=tk.X, padx=8, pady=(4, 2))
-        self.ws_sugg_title = ctk.CTkLabel(sugg_top, text=t("suggestions_title"), font=ctk.CTkFont(size=9, weight="bold"), text_color="#94a3b8")
+        self.ws_sugg_title = ctk.CTkLabel(sugg_top, text=t("suggestions_title"), font=self.F["tiny_b"], text_color=Theme.MUTED)
         self.ws_sugg_title.pack(side=tk.LEFT)
 
         btns_sugg = ctk.CTkFrame(sugg_top, fg_color="transparent")
         btns_sugg.pack(side=tk.RIGHT)
 
         eng_name = self.ollama_model if self.translation_engine == "ollama" else self.translation_engine.upper()
-        self.btn_request_ai = ctk.CTkButton(
-            btns_sugg,
-            text=f"✨ {eng_name}",
-            height=22,
-            font=ctk.CTkFont(size=9, weight="bold"),
-            fg_color="#1e293b",
-            hover_color="#0284c7",
-            border_width=1,
-            border_color="#0369a1",
-            cursor="hand2",
-            command=self.translate_active_row_ai
-        )
+        self.btn_request_ai = self._mk_btn(btns_sugg, f"✨ {eng_name}", self.translate_active_row_ai, "ghost", height=24, font="tiny_b",
+                                           border_width=1, border_color="#0369a1", hover_color=Theme.ACCENT)
         self.btn_request_ai.pack(side=tk.LEFT, padx=(0, 4))
-        CTooltip(self.btn_request_ai, t("tooltip_ai_req", engine=eng_name))
+        CTooltip(self.btn_request_ai, lambda: t("tooltip_ai_req", engine=self.ollama_model if self.translation_engine == "ollama" else self.translation_engine.upper()))
 
-        self.btn_request_google = ctk.CTkButton(
-            btns_sugg,
-            text="🌐 Google",
-            height=22,
-            width=62,
-            font=ctk.CTkFont(size=9, weight="bold"),
-            fg_color="#1e293b",
-            hover_color="#0284c7",
-            border_width=1,
-            border_color="#334155",
-            cursor="hand2",
-            command=self.translate_active_row_google
-        )
+        self.btn_request_google = self._mk_btn(btns_sugg, "🌐 Google", self.translate_active_row_google, "ghost", height=24, width=66, font="tiny_b",
+                                               border_width=1, border_color="#334155", hover_color=Theme.ACCENT)
         self.btn_request_google.pack(side=tk.LEFT)
-        CTooltip(self.btn_request_google, t("tooltip_google_req"))
+        CTooltip(self.btn_request_google, lambda: t("tooltip_google_req"))
 
-        self.sugg_items_container = ctk.CTkFrame(self.suggestions_frame, fg_color="transparent")
+        self.sugg_items_container = tk.Frame(self.suggestions_frame, bg=Theme.BAR)
         self.sugg_items_container.pack(fill=tk.X, padx=6, pady=(0, 6))
+        self._build_suggestion_pool()
 
-        # 5. Workspace Action Bar with Proportional Buttons
-        action_bar = ctk.CTkFrame(self.right_workspace, fg_color="transparent")
-        action_bar.pack(fill=tk.X, padx=12, pady=(4, 10))
+        # 5. Action bar
+        action_bar = ctk.CTkFrame(ws, fg_color="transparent")
+        action_bar.pack(fill=tk.X, padx=12, pady=(4, 8))
 
-        self.btn_save_next = ctk.CTkButton(
-            action_bar,
-            text=t("btn_save_next"),
-            height=36,
-            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-            fg_color="#16a34a",
-            hover_color="#15803d",
-            cursor="hand2",
-            command=self.save_and_next
-        )
+        self.btn_save_next = self._mk_btn(action_bar, t("btn_save_next"), self.save_and_next, "success", height=38)
         self.btn_save_next.pack(fill=tk.X, pady=(0, 6))
 
         sec_bar = ctk.CTkFrame(action_bar, fg_color="transparent")
         sec_bar.pack(fill=tk.X)
 
-        
-
-        self.btn_row_orig = ctk.CTkButton(
-            sec_bar,
-            text=t("btn_copy_orig"),
-            width=76,
-            height=32,
-            font=ctk.CTkFont(size=11),
-            fg_color="#334155",
-            hover_color="#475569",
-            cursor="hand2",
-            command=self.copy_from_orig
-        )
-        self.btn_row_orig.pack(side=tk.LEFT, padx=3)
-
-        self.btn_row_clear = ctk.CTkButton(
-            sec_bar,
-            text=t("btn_clear_row"),
-            width=72,
-            height=32,
-            font=ctk.CTkFont(size=11),
-            fg_color="#334155",
-            hover_color="#475569",
-            cursor="hand2",
-            command=self.clear_active_translation
-        )
+        self.btn_row_orig = self._mk_btn(sec_bar, t("btn_copy_orig"), self.copy_from_orig, "muted", width=76, height=32, font="small")
+        self.btn_row_orig.pack(side=tk.LEFT, padx=(0, 3))
+        self.btn_row_clear = self._mk_btn(sec_bar, t("btn_clear_row"), self.clear_active_translation, "muted", width=72, height=32, font="small")
         self.btn_row_clear.pack(side=tk.LEFT, padx=3)
-
-        self.btn_concise_sec = ctk.CTkButton(
-            sec_bar,
-            text=t("btn_concise"),
-            width=76,
-            height=32,
-            font=ctk.CTkFont(size=11),
-            fg_color="#d97706",
-            hover_color="#b45309",
-            cursor="hand2",
-            command=self.apply_concise_suggestion
-        )
+        self.btn_concise_sec = self._mk_btn(sec_bar, t("btn_concise"), self.apply_concise_suggestion, "warn", width=76, height=32, font="small")
         self.btn_concise_sec.pack(side=tk.LEFT, padx=3)
         CTooltip(self.btn_concise_sec, lambda: t("tooltip_concise"))
 
-        # Proportional & Symmetrical Navigation Buttons
-        self.btn_nav_next = ctk.CTkButton(
-            sec_bar,
-            text=t("nav_next"),
-            width=64,
-            height=32,
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#1e293b",
-            hover_color="#334155",
-            cursor="hand2",
-            command=self.nav_next
-        )
+        self.btn_nav_next = self._mk_btn(sec_bar, t("nav_next"), self.nav_next, "ghost", width=64, height=32, font="small_b")
         self.btn_nav_next.pack(side=tk.RIGHT, padx=(3, 0))
         CTooltip(self.btn_nav_next, lambda: t("tooltip_next"))
-
-        self.btn_nav_prev = ctk.CTkButton(
-            sec_bar,
-            text=t("nav_prev"),
-            width=64,
-            height=32,
-            font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#1e293b",
-            hover_color="#334155",
-            cursor="hand2",
-            command=self.nav_prev
-        )
+        self.btn_nav_prev = self._mk_btn(sec_bar, t("nav_prev"), self.nav_prev, "ghost", width=64, height=32, font="small_b")
         self.btn_nav_prev.pack(side=tk.RIGHT, padx=3)
         CTooltip(self.btn_nav_prev, lambda: t("tooltip_prev"))
 
+        self.hotkeys_lbl = ctk.CTkLabel(ws, text=t("legend_hotkeys"), font=self.F["tiny"], text_color=Theme.DIM)
+        self.hotkeys_lbl.pack(pady=(0, 6))
+
     def _build_status_bar(self):
-        self.status_bar = ctk.CTkFrame(self, fg_color="#090d16", height=28, corner_radius=0)
+        self.status_bar = ctk.CTkFrame(self, fg_color=Theme.BG, height=32, corner_radius=0)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
         self.status_bar.pack_propagate(False)
 
-        self.status_lbl = ctk.CTkLabel(
-            self.status_bar,
-            text=t("status_ready", trans=0, total=0, pct=0),
-            font=ctk.CTkFont(family="Segoe UI", size=10),
-            text_color="#94a3b8"
-        )
-        self.status_lbl.pack(side=tk.LEFT, padx=12)
+        self.status_lbl = ctk.CTkLabel(self.status_bar, text=t("status_ready", trans=0, total=0, pct=0), font=self.F["tiny"], text_color=Theme.MUTED)
+        self.status_lbl.pack(side=tk.LEFT, padx=(12, 8))
 
-        self.stats_lbl = ctk.CTkLabel(
-            self.status_bar,
-            text="",
-            font=ctk.CTkFont(family="Segoe UI", size=10, weight="bold"),
-            text_color="#38bdf8"
-        )
+        self.busy_bar = ctk.CTkProgressBar(self.status_bar, width=110, height=4, mode="indeterminate", fg_color=Theme.PANEL, progress_color=Theme.ACCENT_LIGHT)
+
+        self.stats_lbl = ctk.CTkLabel(self.status_bar, text="", font=self.F["tiny_b"], text_color=Theme.ACCENT_LIGHT)
         self.stats_lbl.pack(side=tk.RIGHT, padx=12)
 
+        self.total_bar = ctk.CTkProgressBar(self.status_bar, width=120, height=6, fg_color=Theme.PANEL, progress_color=Theme.OK)
+        self.total_bar.set(0)
+        self.total_bar.pack(side=tk.RIGHT, padx=(0, 4))
+
+        # Auto-translate progress lives here (the top bar had no room for it at the minimum window width)
+        self.top_progress_frame = ctk.CTkFrame(self.status_bar, height=26, fg_color=Theme.CARD, corner_radius=8, border_width=1, border_color=Theme.ACCENT)
+        self.top_progress_lbl = ctk.CTkLabel(self.top_progress_frame, text="", width=230, anchor="w", font=self.F["tiny_b"], text_color=Theme.TEXT)
+        self.top_progress_lbl.pack(side=tk.LEFT, padx=(10, 8))
+        self.top_progress_bar = ctk.CTkProgressBar(self.top_progress_frame, width=150, height=8, fg_color=Theme.PANEL, progress_color=Theme.OK)
+        self.top_progress_bar.pack(side=tk.LEFT, padx=4)
+        self.top_progress_bar.set(0)
+        self.btn_top_cancel = self._mk_btn(self.top_progress_frame, "⏹", self.cancel_auto_translate, "danger", width=28, height=20, font="tiny_b")
+        self.btn_top_cancel.pack(side=tk.LEFT, padx=(6, 6), pady=2)
+        CTooltip(self.btn_top_cancel, lambda: t("tooltip_stop_autotr"))
+
     # -------------------------------------------------------------
-    # Interactive Mod Library Cards & Drag-and-Drop
+    # Mod library
     # -------------------------------------------------------------
 
     def toggle_library(self):
         self.show_library = not self.show_library
         if self.show_library:
             self.lib_frame.pack(side=tk.LEFT, fill=tk.Y, before=self.center_frame)
-            self.lib_frame.pack_propagate(False)
         else:
             self.lib_frame.pack_forget()
         self.cfg["show_library"] = self.show_library
         save_app_config(self.cfg)
 
     def refresh_mod_library(self):
+        self._scan_token += 1
+        token = self._scan_token
+        self.lib_view.set_message(t("lib_scanning"))
+
         def _scan_worker():
-            mods = scan_installed_mods()
+            try:
+                mods = scan_installed_mods()
+                for m in mods:
+                    m["_norm"] = os.path.normcase(os.path.abspath(m["path"]))
+            except Exception:
+                mods = []
+
             def _apply_ui():
+                if token != self._scan_token:
+                    return
                 self.installed_mods = mods
-                self.btn_toggle_lib.configure(text=t("btn_mods", count=len(self.installed_mods)))
-                self.render_mod_cards()
+                self.btn_toggle_lib.configure(text=t("btn_mods", count=len(mods)))
+                self.render_library()
             self.after(0, _apply_ui)
         threading.Thread(target=_scan_worker, daemon=True).start()
 
     def set_lib_filter(self, cat):
         self.lib_filter = cat
-        self.btn_cat_all.configure(fg_color="#0284c7" if cat == "all" else "#1e293b")
-        self.btn_cat_ws.configure(fg_color="#0284c7" if cat == "workshop" else "#1e293b")
-        self.btn_cat_mods.configure(fg_color="#0284c7" if cat == "mods" else "#1e293b")
-        self.render_mod_cards()
+        self.btn_cat_all.configure(fg_color=Theme.ACCENT if cat == "all" else Theme.FIELD)
+        self.btn_cat_ws.configure(fg_color=Theme.ACCENT if cat == "workshop" else Theme.FIELD)
+        self.btn_cat_mods.configure(fg_color=Theme.ACCENT if cat == "mods" else Theme.FIELD)
+        self.render_library()
 
-    def filter_library_cards(self):
-        self.render_mod_cards()
+    def _active_norm(self):
+        return os.path.normcase(self.project.mod_path) if self.project else None
 
-    def render_mod_cards(self):
-        for w in self.cards_scroll.winfo_children():
-            w.destroy()
-
+    def render_library(self):
         q = self.lib_search_entry.get().strip().lower()
-
         filtered = []
         for m in self.installed_mods:
             if self.lib_filter == "workshop" and m["source"] != "Workshop": continue
@@ -2287,100 +2541,22 @@ class ModernTranslatorApp(ctk.CTk):
                 continue
             filtered.append(m)
 
-        for mod in filtered:
-            self._create_mod_card(mod)
-
-    def _create_mod_card(self, mod):
-        is_active = self.project and os.path.samefile(self.project.mod_path, mod["path"]) if self.project and os.path.exists(mod["path"]) else False
-
-        card = ctk.CTkFrame(
-            self.cards_scroll,
-            fg_color="#0284c7" if is_active else "#182234",
-            corner_radius=8,
-            border_width=1,
-            border_color="#0ea5e9" if is_active else "#223048",
-            cursor="hand2"
-        )
-        card.pack(fill=tk.X, pady=4, padx=2)
-
-        top = ctk.CTkFrame(card, fg_color="transparent")
-        top.pack(fill=tk.X, padx=8, pady=(6, 2))
-
-        # High-contrast rounded pill badges (Variant 2 style)
-        if mod["source"] == "Workshop":
-            src_chip = ctk.CTkFrame(top, fg_color="#0b1e3b", corner_radius=10, border_width=1, border_color="#38bdf8")
-            src_lbl = ctk.CTkLabel(src_chip, text="Steam", font=ctk.CTkFont(size=9, weight="bold"), text_color="#38bdf8", padx=7, pady=0)
+        if filtered:
+            self.lib_view.set_mods(filtered, self._active_norm())
+        elif self.installed_mods:
+            self.lib_view.set_message(t("lib_no_match"))
         else:
-            src_chip = ctk.CTkFrame(top, fg_color="#062e1e", corner_radius=10, border_width=1, border_color="#10b981")
-            src_lbl = ctk.CTkLabel(src_chip, text="Mods", font=ctk.CTkFont(size=9, weight="bold"), text_color="#34d399", padx=7, pady=0)
-        src_chip.pack(side=tk.LEFT, padx=(0, 4))
-        src_lbl.pack()
+            self.lib_view.set_message(t("lib_empty"), t("lib_empty_hint"))
 
-        if mod["has_csv"]:
-            fmt_chip = ctk.CTkFrame(top, fg_color="#042724", corner_radius=10, border_width=1, border_color="#14b8a6")
-            fmt_lbl = ctk.CTkLabel(fmt_chip, text="CSV", font=ctk.CTkFont(size=9, weight="bold"), text_color="#2dd4bf", padx=6, pady=0)
-        else:
-            fmt_chip = ctk.CTkFrame(top, fg_color="#200d3d", corner_radius=10, border_width=1, border_color="#a855f7")
-            fmt_lbl = ctk.CTkLabel(fmt_chip, text="DLL", font=ctk.CTkFont(size=9, weight="bold"), text_color="#c084fc", padx=6, pady=0)
-        fmt_chip.pack(side=tk.LEFT, padx=(0, 4))
-        fmt_lbl.pack()
+    # kept for backwards compatibility with older call sites
+    def filter_library_cards(self):
+        self.render_library()
 
-        upd_chip = None
-        upd_lbl = None
-        inst_chip = None
-        inst_lbl = None
+    render_mod_cards = render_library
 
-        if mod.get("has_update"):
-            upd_chip = ctk.CTkFrame(top, fg_color="#3a1503", corner_radius=10, border_width=1, border_color="#f59e0b")
-            upd_lbl = ctk.CTkLabel(
-                upd_chip,
-                text=f"🔄 Update v{mod['version']}",
-                font=ctk.CTkFont(size=9, weight="bold"),
-                text_color="#fbbf24",
-                padx=7,
-                pady=0
-            )
-            upd_chip.pack(side=tk.RIGHT)
-            upd_lbl.pack()
-            CTooltip(upd_chip, t("tooltip_mod_update_avail", ver=mod['version'], inst=mod.get('installed_ver', '')))
-        elif mod.get("matched_installed") or mod["source"] == "Game Mods":
-            inst_chip = ctk.CTkFrame(top, fg_color="#052e16", corner_radius=10, border_width=1, border_color="#16a34a")
-            inst_lbl = ctk.CTkLabel(
-                inst_chip,
-                text=t("badge_installed"),
-                font=ctk.CTkFont(size=9, weight="bold"),
-                text_color="#4ade80",
-                padx=6,
-                pady=0
-            )
-            inst_chip.pack(side=tk.RIGHT)
-            inst_lbl.pack()
-            CTooltip(inst_chip, t("installed_badge"))
-
-        name_lbl = ctk.CTkLabel(
-            card,
-            text=mod["name"][:38],
-            font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-            text_color="#ffffff" if is_active else "#e2e8f0",
-            anchor="w"
-        )
-        name_lbl.pack(fill=tk.X, padx=8, pady=(2, 2))
-
-        sub = ctk.CTkFrame(card, fg_color="transparent")
-        sub.pack(fill=tk.X, padx=8, pady=(0, 6))
-
-        ver_txt = f"v{mod['version']}"
-        if mod.get("author") and mod["author"] != "Unknown":
-            ver_txt += f" • {mod['author'][:16]}"
-        ctk.CTkLabel(sub, text=ver_txt, font=ctk.CTkFont(size=10), text_color="#94a3b8").pack(side=tk.LEFT)
-
-        def _on_click(e=None, m=mod):
-            self.load_mod(m["path"])
-
-        click_targets = [card, name_lbl, top, sub, src_chip, src_lbl, fmt_chip, fmt_lbl]
-        if upd_chip: click_targets.extend([upd_chip, upd_lbl])
-        if inst_chip: click_targets.extend([inst_chip, inst_lbl])
-        for w in click_targets: w.bind("<Button-1>", _on_click)
+    # -------------------------------------------------------------
+    # Loading mods
+    # -------------------------------------------------------------
 
     def on_files_dropped(self, dropped_paths):
         if not dropped_paths: return
@@ -2389,308 +2565,373 @@ class ModernTranslatorApp(ctk.CTk):
         else: self.load_mod(os.path.dirname(first))
 
     def browse_mod_folder(self):
-        f = filedialog.askdirectory(title="Выберите папку мода", initialdir=DEFAULT_WORKSHOP_MODS)
+        f = filedialog.askdirectory(title=t("browse_title"), initialdir=DEFAULT_WORKSHOP_MODS)
         if f: self.load_mod(f)
 
     def load_mod(self, mod_path):
         if not os.path.exists(mod_path):
-            self.toast_show("Папка мода не найдена!", "error")
+            self.toast_show(t("err_mod_not_found"), "error")
             return
 
         lang = self.get_selected_lang_code()
-        self.status_lbl.configure(text=t("status_scanning", name=os.path.basename(mod_path)))
-        self.update_idletasks()
+        self._load_token += 1
+        token = self._load_token
+        name = os.path.basename(mod_path)
+        self._set_busy(True, t("status_scanning", name=name))
 
-        try:
-            self.project = ModProject(mod_path)
-            count = self.project.scan(lang)
+        # Scanning may spawn StringPatcher for every DLL: keep it off the UI thread.
+        def _worker():
+            project, count, err = None, 0, None
+            try:
+                project = ModProject(mod_path)
+                count = project.scan(lang)
+            except Exception as ex:
+                err = ex
+            self.after(0, lambda: self._on_mod_loaded(token, project, count, err, lang))
 
-            meta = self.project.manifest
-            fmt = "CSV" if self.project.is_csv_mod else "DLL"
-            self.mod_badge.configure(text=f"📦 {meta['name']} • {meta['author']} [{fmt}]")
+        threading.Thread(target=_worker, daemon=True).start()
 
-            self.render_mod_cards()
-            self.apply_filter()
-            self.update_stats()
+    def _on_mod_loaded(self, token, project, count, err, lang):
+        self._set_busy(False)
+        if token != self._load_token:
+            return  # a newer load superseded this one
+        if err is not None or project is None:
+            self.toast_show(t("err_load", err=err), "error", 5000)
+            return
 
-            if self.project.new_strings_count > 0:
-                self.toast_show(t("diff_banner", new_count=self.project.new_strings_count, mod_count=self.project.changed_strings_count), "info", 4000)
-            else:
-                self.toast_show(f"Загружен мод '{meta['name']}': {count} строк", "success", 2000)
+        self._autosave()  # persist edits of the previous mod
+        self.project = project
+        self._project_lang = lang
+        self._dirty = False
+        self.selected_item_id = None
+        self._clear_workspace()
 
-            children = self.tree.get_children()
-            if children:
-                self.tree.selection_set(children[0])
-                self.tree.focus(children[0])
-                self.on_tree_select()
+        meta = project.manifest
+        fmt = "CSV" if project.is_csv_mod else "DLL"
+        self.mod_badge.configure(text=f"📦 {meta['name']} • {meta['author']} [{fmt}]")
 
-        except Exception as ex:
-            self.toast_show(f"Ошибка загрузки мода: {ex}", "error")
+        self.render_library()
+        self._update_empty_state()
+        self.apply_filter()
+        self.update_stats()
+
+        if project.new_strings_count > 0 and project.changed_strings_count + project.new_strings_count < len(project.strings):
+            self.toast_show(t("diff_banner", new_count=project.new_strings_count, mod_count=project.changed_strings_count), "info", 4000)
+        else:
+            self.toast_show(t("toast_loaded", name=meta['name'], count=count), "success", 2000)
+
+        children = self.tree.get_children()
+        if children:
+            self.tree.selection_set(children[0])
+            self.tree.focus(children[0])
+            self._apply_selection(force=True)
 
     # -------------------------------------------------------------
-    # Table Filter & Sorting Logic
+    # Table filter & sorting
     # -------------------------------------------------------------
 
     def set_table_filter(self, flt):
         self.current_filter = flt
-        self.btn_filter_all.configure(fg_color="#0284c7" if flt == "all" else "#1e293b")
-        self.btn_filter_untrans.configure(fg_color="#0284c7" if flt == "untranslated" else "#1e293b")
-        self.btn_filter_overflow.configure(fg_color="#0284c7" if flt == "overflow" else "#1e293b")
-        self.btn_filter_diff.configure(fg_color="#0284c7" if flt == "diff" else "#1e293b")
+        self.btn_filter_all.configure(fg_color=Theme.ACCENT if flt == "all" else Theme.FIELD)
+        self.btn_filter_untrans.configure(fg_color=Theme.ACCENT if flt == "untranslated" else Theme.FIELD)
+        self.btn_filter_overflow.configure(fg_color=Theme.ACCENT if flt == "overflow" else Theme.FIELD)
+        self.btn_filter_diff.configure(fg_color=Theme.ACCENT if flt == "diff" else Theme.FIELD)
         self.apply_filter()
 
     def sort_new_to_top(self):
         if not self.project or not self.project.strings: return
         self.project.strings.sort(key=lambda s: 0 if s.get("status") in ("new", "changed") else 1)
         self.apply_filter()
-        self.toast_show("Новые строки из обновления перемещены в начало!", "info")
+        self.toast_show(t("toast_new_top"), "info")
+
+    def _set_filter_counts(self, untrans, overflow, diff):
+        self.btn_filter_untrans.configure(text=f"{t('filter_untrans')} ({untrans})")
+        self.btn_filter_overflow.configure(text=f"{t('filter_overflow')} ({overflow})")
+        self.btn_filter_diff.configure(text=f"{t('filter_diff')} ({diff})")
 
     def apply_filter(self):
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        self._filter_gen += 1  # any chunked insert still in flight becomes stale (it used to cause duplicate-iid errors)
+        gen = self._filter_gen
 
-        if not self.project: return
+        children = self.tree.get_children()
+        if children:
+            self.tree.delete(*children)
+
+        if not self.project:
+            self._set_filter_counts(0, 0, 0)
+            return
 
         q = self.search_entry.get().strip().lower()
-        filtered = []
-        untrans_count = 0
-        overflow_count = 0
-        diff_count = 0
+        flt = self.current_filter
+        trans_map = self.project.translations
+        badge_new, badge_changed = t("badge_new"), t("badge_changed")
+        badge_long, badge_ok, badge_empty = t("badge_long"), t("badge_ok"), t("badge_empty")
+
+        rows = []
+        untrans_count = overflow_count = diff_count = 0
 
         for s in self.project.strings:
             idx = s["index"]
             orig = s["original"]
-            trans = self.project.translations.get(idx, "")
+            trans = trans_map.get(idx, "")
             st = s.get("status", "synced")
 
             is_untrans = not trans
-            diag = s.get("_diag")
-            if diag is None:
-                diag = analyze_ui_fit(orig, trans)
-                s["_diag"] = diag
-
-            is_overflow = diag["is_overflow_risk"]
+            is_overflow = analyze_ui_fit(orig, trans)["is_overflow_risk"]  # lru-cached by (orig, trans)
             is_diff = st in ("new", "changed")
 
             if is_untrans: untrans_count += 1
             if is_overflow: overflow_count += 1
             if is_diff: diff_count += 1
 
-            if self.current_filter == "untranslated" and not is_untrans: continue
-            if self.current_filter == "overflow" and not is_overflow: continue
-            if self.current_filter == "diff" and not is_diff: continue
+            if flt == "untranslated" and not is_untrans: continue
+            if flt == "overflow" and not is_overflow: continue
+            if flt == "diff" and not is_diff: continue
 
-            if q:
-                if q not in orig.lower() and q not in trans.lower() and q not in s.get("key", "").lower():
-                    continue
+            if q and q not in orig.lower() and q not in trans.lower() and q not in s.get("key", "").lower():
+                continue
 
-            if st == "new": status_badge = t("badge_new")
-            elif st == "changed": status_badge = t("badge_changed")
-            elif is_overflow: status_badge = t("badge_long")
-            elif trans: status_badge = t("badge_ok")
-            else: status_badge = t("badge_empty")
+            if st == "new": badge = badge_new
+            elif st == "changed": badge = badge_changed
+            elif is_overflow: badge = badge_long
+            elif trans: badge = badge_ok
+            else: badge = badge_empty
 
-            fmt_badge = f"[{s.get('type', 'STR')}]"
-            filtered.append((idx, fmt_badge, orig, trans, status_badge))
+            rows.append((idx, s.get("type", "STR"), orig, trans, badge))
 
-        # Instant progressive streaming: first 100 rows appear in <5ms, rest stream smoothly
-        def _stream_rows(items, start_idx=0, chunk=200):
-            end_idx = min(start_idx + chunk, len(items))
-            for i in range(start_idx, end_idx):
-                item_idx, ftype, o_text, t_text, s_badge = items[i]
-                row_tag = "even" if i % 2 == 0 else "odd"
-                self.tree.insert("", tk.END, iid=str(item_idx), values=(
-                    i + 1,
-                    ftype,
-                    o_text,
-                    t_text,
-                    s_badge
-                ), tags=(row_tag,))
-            if end_idx < len(items):
-                self.after(5, lambda: _stream_rows(items, end_idx, chunk))
+        self._set_filter_counts(untrans_count, overflow_count, diff_count)
+        self._stream_rows(rows, 0, gen)
 
-        _stream_rows(filtered, 0, 100)
+    def _stream_rows(self, rows, start, gen):
+        """First chunk is inserted synchronously (instant paint), the rest streams in without blocking input."""
+        if gen != self._filter_gen:
+            return
+        end = min(start + (150 if start == 0 else 500), len(rows))
+        insert = self.tree.insert
+        for i in range(start, end):
+            idx, ftype, o_text, t_text, badge = rows[i]
+            insert("", tk.END, iid=str(idx), values=(i + 1, f"[{ftype}]", _disp(o_text), _disp(t_text), badge),
+                   tags=("even" if i % 2 == 0 else "odd",))
 
-        self.btn_filter_untrans.configure(text=f"{t('filter_untrans')} ({untrans_count})")
-        self.btn_filter_overflow.configure(text=f"{t('filter_overflow')} ({overflow_count})")
-        self.btn_filter_diff.configure(text=f"{t('filter_diff')} ({diff_count})")
+        sel = self.selected_item_id
+        if sel is not None and not self.tree.selection() and self.tree.exists(sel):
+            self.tree.selection_set(sel)  # restore highlight; same iid => the handler skips the reload
+
+        if end < len(rows):
+            self.after(6, lambda: self._stream_rows(rows, end, gen))
 
     def update_stats(self):
         if not self.project:
             self.stats_lbl.configure(text="")
+            self.total_bar.set(0)
             return
         total = len(self.project.strings)
-        done = sum(1 for s in self.project.strings if self.project.translations.get(s["index"]))
+        trans_map = self.project.translations
+        done = sum(1 for s in self.project.strings if trans_map.get(s["index"]))
         pct = int(done / total * 100) if total > 0 else 0
         self.stats_lbl.configure(text=t("stats_summary", total=total, done=done, pct=pct))
+        self.total_bar.set(done / total if total else 0)
         self.status_lbl.configure(text=t("status_ready", trans=done, total=total, pct=pct))
 
     # -------------------------------------------------------------
-    # Workspace & Crowdin Suggestions
+    # Workspace
     # -------------------------------------------------------------
 
+    def _set_box(self, box, text):
+        box.delete("1.0", tk.END)
+        if text:
+            box.insert("1.0", text)
+
+    def _clear_workspace(self):
+        self.ws_orig_box.configure(state="normal")
+        self._set_box(self.ws_orig_box, "")
+        self.ws_orig_box.configure(state="disabled")
+        self._set_box(self.ws_trans_box, "")
+        self.ws_orig_len_lbl.configure(text=t("char_count", lang="cn", count=0))
+        self.ws_meta_lbl.configure(text=f"{t('meta_file_prefix')} -")
+        self._render_placeholder_chips("")
+        self.active_suggestions = []
+        self._render_suggestion_rows()
+        self._on_translation_modified()
+
     def on_tree_select(self, event=None):
+        # Debounced: holding an arrow key fires dozens of events, only the last one needs the full refresh.
+        self._debounce("select", 20, self._apply_selection)
+
+    def _apply_selection(self, force=False):
+        if not self.project: return
         sel = self.tree.selection()
         if not sel: return
         item_id = sel[0]
+        if item_id == self.selected_item_id and not force:
+            return
         self.selected_item_id = item_id
 
-        values = self.tree.item(item_id, "values")
-        if not values or len(values) < 4: return
+        try:
+            idx = int(item_id)
+        except ValueError:
+            return
+        s_obj = self.project.by_index.get(idx)
+        if not s_obj: return
 
-        idx = int(values[0]) - 1
-        orig = values[2]
-        trans = values[3]
+        # Read from the model, not from tree cells: Tk converts numeric-looking cell values ("007" -> 7).
+        orig = s_obj["original"]
+        trans = self.project.translations.get(idx, "")
 
         self.ws_orig_box.configure(state="normal")
-        self.ws_orig_box.delete("1.0", tk.END)
-        self.ws_orig_box.insert("1.0", orig)
+        self._set_box(self.ws_orig_box, orig)
         self.ws_orig_box.configure(state="disabled")
-
         self.ws_orig_len_lbl.configure(text=t("char_count", lang="cn", count=len(orig)))
 
-        s_obj = next((s for s in self.project.strings if s["index"] == idx), None) if self.project else None
-        meta_val = s_obj.get('dll', s_obj.get('key', '-')) if s_obj else "-"
+        meta_val = s_obj.get("dll", s_obj.get("key", "-"))
         self.ws_meta_lbl.configure(text=f"{t('meta_file_prefix')} {meta_val}")
 
-        self.ws_trans_box.delete("1.0", tk.END)
-        self.ws_trans_box.insert("1.0", trans)
+        self._set_box(self.ws_trans_box, trans)
 
         self._render_placeholder_chips(orig)
         self._on_translation_modified()
-        self._render_crowdin_suggestions(orig, trans)
+        self._refresh_suggestions(orig, trans)
 
     def _render_placeholder_chips(self, orig_text):
-        for w in self.chips_frame.winfo_children(): w.destroy()
-        tokens = TOKEN_REGEX.findall(orig_text)
-        if tokens:
-            for t_tok in set(tokens):
-                btn = ctk.CTkButton(
-                    self.chips_frame,
-                    text=t_tok,
-                    height=20,
-                    width=max(28, len(t_tok)*7+8),
-                    font=ctk.CTkFont(family="Consolas", size=9),
-                    fg_color="#334155",
-                    hover_color="#0284c7",
-                    cursor="hand2",
-                    command=lambda tok=t_tok: self.insert_token(tok)
-                )
-                btn.pack(side=tk.LEFT, padx=2)
-                CTooltip(btn, t("tooltip_insert_token", tok=t_tok))
+        for chip in self._chip_pool:
+            chip.pack_forget()
+        tokens = list(dict.fromkeys(TOKEN_REGEX.findall(orig_text))) if orig_text else []
+        for chip, tok in zip(self._chip_pool, tokens):
+            chip._tok = tok
+            chip.configure(text=tok)
+            chip.pack(side=tk.LEFT, padx=2)
 
-    def _render_crowdin_suggestions(self, orig, current_trans, ai_res=None, ai_engine=None):
-        """Renders Crowdin-style list items grouped into Glossary/TM and Machine/AI."""
-        for w in self.sugg_items_container.winfo_children():
-            w.destroy()
+    # ---- suggestions (pooled widgets) ----
 
+    def _build_suggestion_pool(self):
+        c = self.sugg_items_container
+        self._sugg_headers = []
+        for _ in range(2):
+            lbl = tk.Label(c, text="", bg=Theme.BAR, anchor="w", font=self.tkF["sugg_hdr"])
+            self._sugg_headers.append(lbl)
+
+        self._sugg_rows = []
+        for _ in range(5):
+            frame = tk.Frame(c, bg=Theme.PANEL, cursor="hand2")
+            top = tk.Frame(frame, bg=Theme.PANEL)
+            top.pack(fill=tk.X, padx=8, pady=(4, 0))
+            txt = tk.Label(top, text="", bg=Theme.PANEL, fg=Theme.TEXT, font=self.tkF["sugg"], anchor="w", justify="left", wraplength=int(300 * self.k))
+            txt.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            kbd = tk.Label(top, text="", bg=Theme.PANEL, fg=Theme.DIM, font=self.tkF["kbd"])
+            kbd.pack(side=tk.RIGHT, padx=(6, 0))
+            src = tk.Label(frame, text="", bg=Theme.PANEL, font=self.tkF["sugg_src"], anchor="w")
+            src.pack(fill=tk.X, padx=8, pady=(0, 4))
+            row = {"frame": frame, "top": top, "txt": txt, "kbd": kbd, "src": src, "text": ""}
+            for w in (frame, top, txt, kbd, src):
+                w.bind("<Enter>", lambda e, r=row: self._paint_sugg(r, Theme.FIELD))
+                w.bind("<Leave>", lambda e, r=row: self._paint_sugg(r, Theme.PANEL))
+                w.bind("<Button-1>", lambda e, r=row: self._apply_text(r["text"]))
+            self._sugg_rows.append(row)
+
+        self._sugg_empty = tk.Label(c, text="", bg=Theme.BAR, fg=Theme.DIM, font=self.tkF["sugg_src"], anchor="w")
+        c.bind("<Configure>", self._on_sugg_resize)
+
+    def _on_sugg_resize(self, event):
+        wrap = max(120, event.width - int(90 * self.k))
+        for row in self._sugg_rows:
+            row["txt"].configure(wraplength=wrap)
+
+    def _paint_sugg(self, row, color):
+        for key in ("frame", "top", "txt", "kbd", "src"):
+            row[key].configure(bg=color)
+
+    def _apply_text(self, text):
+        self._set_box(self.ws_trans_box, text)
+        self._on_translation_modified()
+
+    def _refresh_suggestions(self, orig, trans, ai_res=None, ai_engine=None):
         lang = self.get_selected_lang_code()
+        draft = None
+        need_draft = not trans and not ai_res
+        if need_draft:
+            draft = self._draft_cache.get((orig, lang))
         self.active_suggestions = generate_crowdin_suggestions(
-            orig, current_trans,
-            target_lang=lang,
-            ai_res=ai_res,
-            ai_engine=ai_engine or self.translation_engine,
-            ai_model=self.ollama_model
+            orig, trans, target_lang=lang, ai_res=ai_res,
+            ai_engine=ai_engine or self.translation_engine, ai_model=self.ollama_model, draft=draft
         )
+        self._render_suggestion_rows()
+        if need_draft and draft is None and orig.strip():
+            # The Google draft used to be fetched synchronously right here (up to 10 s freeze per row).
+            self._debounce("draft", 450, lambda: self._fetch_draft(orig, lang))
 
-        if not self.active_suggestions:
-            ctk.CTkLabel(
-                self.sugg_items_container,
-                text=t("no_suggestions"),
-                font=ctk.CTkFont(size=10),
-                text_color="#64748b"
-            ).pack(anchor="w", padx=6, pady=4)
+    def _fetch_draft(self, orig, lang):
+        key = (orig, lang)
+        if key in self._draft_cache or key in self._draft_pending:
+            return
+        self._draft_pending.add(key)
+
+        def _worker():
+            try:
+                res = translate_batch([orig], target_lang=lang)
+                text = res[0] if res else ""
+            except Exception:
+                text = ""
+
+            def _done():
+                self._draft_pending.discard(key)
+                if text and text.strip() != orig.strip():
+                    if len(self._draft_cache) > 400:
+                        self._draft_cache.pop(next(iter(self._draft_cache)))
+                    self._draft_cache[key] = text
+                    self._on_draft_ready(orig, lang)
+            self.after(0, _done)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_draft_ready(self, orig, lang):
+        if not self.project or self.selected_item_id is None: return
+        cur_orig = self.ws_orig_box.get("1.0", tk.END).strip()
+        cur_trans = self.ws_trans_box.get("1.0", tk.END).strip()
+        if cur_orig == orig.strip() and not cur_trans and lang == self.get_selected_lang_code():
+            self._refresh_suggestions(orig, "")
+
+    def _render_suggestion_rows(self):
+        for w in self._sugg_headers: w.pack_forget()
+        for r in self._sugg_rows: r["frame"].pack_forget()
+        self._sugg_empty.pack_forget()
+
+        items = self.active_suggestions
+        if not items:
+            self._sugg_empty.configure(text=t("no_suggestions"))
+            self._sugg_empty.pack(fill=tk.X, padx=6, pady=4)
             return
 
-        # Separate items into groups like Crowdin
-        tm_items = [s for s in self.active_suggestions if any(k in s["source"].lower() for k in ["глоссарий", "компактный", "glossary", "compact", "concise"])]
-        mt_items = [s for s in self.active_suggestions if s not in tm_items]
+        tm_items = [s for s in items if any(k in s["source"].lower() for k in ["глоссарий", "компактный", "glossary", "compact", "concise"])]
+        mt_items = [s for s in items if s not in tm_items]
 
-        for i in range(1, 6):
-            self.ws_trans_box.bind(f"<Control-Key-{i}>", lambda e, idx=i-1: self.apply_suggestion_by_index(idx))
-
-        global_idx = 0
-
-        def _render_section(title, items, icon, title_color):
-            nonlocal global_idx
-            if not items: return
-
-            sec_hdr = ctk.CTkFrame(self.sugg_items_container, fg_color="transparent")
-            sec_hdr.pack(fill=tk.X, padx=4, pady=(4, 1))
-            ctk.CTkLabel(
-                sec_hdr,
-                text=f"{icon} {title}",
-                font=ctk.CTkFont(family="Segoe UI", size=9, weight="bold"),
-                text_color=title_color
-            ).pack(side=tk.LEFT)
-
-            for s in items:
-                idx = global_idx
-                global_idx += 1
-                row = ctk.CTkFrame(
-                    self.sugg_items_container,
-                    fg_color="#0f172a",
-                    corner_radius=4,
-                    border_width=0,
-                    cursor="hand2"
-                )
-                row.pack(fill=tk.X, padx=2, pady=1)
-
-                top_line = ctk.CTkFrame(row, fg_color="transparent")
-                top_line.pack(fill=tk.X, padx=6, pady=(3, 0))
-
-                txt_lbl = ctk.CTkLabel(
-                    top_line,
-                    text=s["text"],
-                    font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-                    text_color="#f8fafc",
-                    anchor="w",
-                    justify="left"
-                )
-                txt_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-                kbd_lbl = ctk.CTkLabel(
-                    top_line,
-                    text=f"Ctrl+{idx+1}" if idx < 5 else "",
-                    font=ctk.CTkFont(family="Consolas", size=9),
-                    text_color="#64748b"
-                )
-                kbd_lbl.pack(side=tk.RIGHT)
-
-                sub_line = ctk.CTkFrame(row, fg_color="transparent")
-                sub_line.pack(fill=tk.X, padx=6, pady=(0, 3))
-
-                src_lbl = ctk.CTkLabel(
-                    sub_line,
-                    text=s["source"],
-                    font=ctk.CTkFont(size=9),
-                    text_color=s.get("badge_color", "#94a3b8")
-                )
-                src_lbl.pack(side=tk.LEFT)
-
-                def _on_enter(e, r=row): r.configure(fg_color="#1e293b")
-                def _on_leave(e, r=row): r.configure(fg_color="#0f172a")
-                def _apply(e=None, text_to_set=s["text"]):
-                    self.ws_trans_box.delete("1.0", tk.END)
-                    self.ws_trans_box.insert("1.0", text_to_set)
-                    self._on_translation_modified()
-
-                for w in [row, top_line, sub_line, txt_lbl, kbd_lbl, src_lbl]:
-                    w.bind("<Enter>", _on_enter)
-                    w.bind("<Leave>", _on_leave)
-                    w.bind("<Button-1>", _apply)
-
-        if tm_items:
-            _render_section(t("sec_glossary"), tm_items, "📖", "#38bdf8")
-        if mt_items:
-            _render_section(t("sec_machine_ai"), mt_items, "🤖", "#a855f7")
+        # global order == hotkey order (Ctrl+1..5)
+        hdr_i = 0
+        row_i = 0
+        self.active_suggestions = []
+        for title, group, icon, color in ((t("sec_glossary"), tm_items, "📖", Theme.ACCENT_LIGHT),
+                                          (t("sec_machine_ai"), mt_items, "🤖", "#a855f7")):
+            if not group or hdr_i >= len(self._sugg_headers):
+                continue
+            hdr = self._sugg_headers[hdr_i]
+            hdr_i += 1
+            hdr.configure(text=f"{icon} {title}", fg=color)
+            hdr.pack(fill=tk.X, padx=4, pady=(4, 1))
+            for s in group:
+                if row_i >= len(self._sugg_rows):
+                    break
+                row = self._sugg_rows[row_i]
+                row["text"] = s["text"]
+                row["txt"].configure(text=s["text"])
+                row["kbd"].configure(text=f"Ctrl+{row_i + 1}" if row_i < 5 else "")
+                row["src"].configure(text=s["source"], fg=s.get("badge_color", Theme.MUTED))
+                self._paint_sugg(row, Theme.PANEL)
+                row["frame"].pack(fill=tk.X, padx=2, pady=1)
+                self.active_suggestions.append(s)
+                row_i += 1
 
     def apply_suggestion_by_index(self, index):
-        if hasattr(self, "active_suggestions") and index < len(self.active_suggestions):
-            s_text = self.active_suggestions[index]["text"]
-            self.ws_trans_box.delete("1.0", tk.END)
-            self.ws_trans_box.insert("1.0", s_text)
-            self._on_translation_modified()
+        if index < len(self.active_suggestions):
+            self._apply_text(self.active_suggestions[index]["text"])
             return "break"
         return None
 
@@ -2704,24 +2945,23 @@ class ModernTranslatorApp(ctk.CTk):
         diag = analyze_ui_fit(orig, trans)
 
         if diag["is_overflow_risk"]:
-            self.ws_overflow_alert.pack(fill=tk.X, padx=10, pady=(4, 6))
-            ratio_pct = int(diag["ratio"] * 100)
-            self.ws_overflow_alert_lbl.configure(
-                text=t("overflow_warning", ratio=diag["ratio"], pct=ratio_pct)
-            )
-            self.btn_concise.pack(side=tk.RIGHT, padx=6, pady=3)
-        else:
+            if not self._alert_visible:
+                self.ws_overflow_alert.pack(fill=tk.X, padx=10, pady=(4, 6))
+                self._alert_visible = True
+            self.ws_overflow_alert_lbl.configure(text=t("overflow_warning", ratio=diag["ratio"], pct=int(diag["ratio"] * 100)))
+        elif self._alert_visible:
             self.ws_overflow_alert.pack_forget()
+            self._alert_visible = False
 
         if trans:
             if diag["is_overflow_risk"]:
-                self.ws_status_chip.configure(fg_color="#451a03", border_color="#f59e0b")
+                self.ws_status_chip.configure(fg_color="#451a03", border_color=Theme.WARN)
                 self.ws_status_badge.configure(text=t("badge_long"), text_color="#fde68a")
             else:
-                self.ws_status_chip.configure(fg_color="#064e3b", border_color="#10b981")
+                self.ws_status_chip.configure(fg_color="#064e3b", border_color=Theme.OK)
                 self.ws_status_badge.configure(text=t("badge_ok"), text_color="#6ee7b7")
         else:
-            self.ws_status_chip.configure(fg_color="#1e293b", border_color="#64748b")
+            self.ws_status_chip.configure(fg_color=Theme.FIELD, border_color="#64748b")
             self.ws_status_badge.configure(text=t("badge_empty"), text_color="#cbd5e1")
 
     def insert_token(self, token):
@@ -2734,86 +2974,97 @@ class ModernTranslatorApp(ctk.CTk):
         trans = self.ws_trans_box.get("1.0", tk.END).strip()
         cand = make_concise(orig, trans)
         if cand:
-            self.ws_trans_box.delete("1.0", tk.END)
-            self.ws_trans_box.insert("1.0", cand)
-            self._on_translation_modified()
-            self.toast_show("Применен краткий вариант для интерфейса", "info")
+            self._apply_text(cand)
+            self.toast_show(t("toast_concise_applied"), "info")
+
+    # -------------------------------------------------------------
+    # Saving & navigation
+    # -------------------------------------------------------------
 
     def save_and_next(self):
-        if not self.selected_item_id or not self.project: return
+        if self.selected_item_id is None or not self.project: return
 
         idx = int(self.selected_item_id)
         trans = self.ws_trans_box.get("1.0", tk.END).strip()
+        orig = self.ws_orig_box.get("1.0", tk.END).strip()
 
         self.project.translations[idx] = trans
-
-        s_obj = next((s for s in self.project.strings if s["index"] == idx), None)
+        s_obj = self.project.by_index.get(idx)
         if s_obj:
             s_obj["translation"] = trans
             s_obj["status"] = "synced"
+        self._dirty = True
+        self._debounce("autosave", 2000, self._autosave)
 
-        orig = self.ws_orig_box.get("1.0", tk.END).strip()
         diag = analyze_ui_fit(orig, trans)
         if diag["is_overflow_risk"]: status_badge = t("badge_long")
         elif trans: status_badge = t("badge_ok")
         else: status_badge = t("badge_empty")
 
-        values = list(self.tree.item(self.selected_item_id, "values"))
-        values[3] = trans
-        values[4] = status_badge
-        self.tree.item(self.selected_item_id, values=values)
+        if self.tree.exists(self.selected_item_id):
+            values = list(self.tree.item(self.selected_item_id, "values"))
+            values[3] = _disp(trans)
+            values[4] = status_badge
+            self.tree.item(self.selected_item_id, values=values)
 
         self.update_stats()
 
-        self.btn_save_next.configure(fg_color="#059669", text="✓ Сохранено!")
-        self.after(250, lambda: self.btn_save_next.configure(fg_color="#16a34a", text=t("btn_save_next")))
+        self.btn_save_next.configure(fg_color="#059669", text=t("saved_flash"))
+        self.after(250, lambda: self.btn_save_next.configure(fg_color=Theme.BTN["success"][0], text=t("btn_save_next")))
 
         all_items = self.tree.get_children()
         try:
             curr_pos = all_items.index(self.selected_item_id)
-            for nxt in all_items[curr_pos+1:]:
-                vals = self.tree.item(nxt, "values")
-                if not vals[3]:
-                    self.tree.selection_set(nxt)
-                    self.tree.see(nxt)
-                    self.on_tree_select()
-                    return
-            if curr_pos + 1 < len(all_items):
-                nxt = all_items[curr_pos + 1]
-                self.tree.selection_set(nxt)
-                self.tree.see(nxt)
-                self.on_tree_select()
-        except Exception: pass
+        except ValueError:
+            return
+        tr_map = self.project.translations
+        for nxt in all_items[curr_pos + 1:]:
+            if not tr_map.get(int(nxt)):
+                self._goto(nxt)
+                return
+        if curr_pos + 1 < len(all_items):
+            self._goto(all_items[curr_pos + 1])
+
+    def _goto(self, iid):
+        self.tree.selection_set(iid)
+        self.tree.focus(iid)
+        self.tree.see(iid)
+        self._apply_selection()
 
     def nav_next(self):
         all_items = self.tree.get_children()
         if not all_items: return
-        if self.selected_item_id and self.selected_item_id in all_items:
+        if self.selected_item_id in all_items:
             idx = all_items.index(self.selected_item_id)
             if idx + 1 < len(all_items):
-                nxt = all_items[idx + 1]
-                self.tree.selection_set(nxt)
-                self.tree.see(nxt)
-                self.on_tree_select()
+                self._goto(all_items[idx + 1])
         else:
-            self.tree.selection_set(all_items[0])
-            self.on_tree_select()
+            self._goto(all_items[0])
+        return "break"
 
     def nav_prev(self):
         all_items = self.tree.get_children()
         if not all_items: return
-        if self.selected_item_id and self.selected_item_id in all_items:
+        if self.selected_item_id in all_items:
             idx = all_items.index(self.selected_item_id)
             if idx - 1 >= 0:
-                prev_i = all_items[idx - 1]
-                self.tree.selection_set(prev_i)
-                self.tree.see(prev_i)
-                self.on_tree_select()
+                self._goto(all_items[idx - 1])
+        return "break"
+
+    def _autosave(self):
+        """Persist manual edits to translations_<lang>.json (they used to be lost unless Build was pressed)."""
+        if self.project and self._dirty:
+            self._dirty = False
+            try: self.project.save_translations_cache(self._project_lang)
+            except Exception as ex: print(f"Autosave failed: {ex}")
+
+    # -------------------------------------------------------------
+    # Row translation
+    # -------------------------------------------------------------
 
     def update_ai_btn_text(self):
-        if hasattr(self, "btn_request_ai"):
-            eng_name = self.ollama_model if self.translation_engine == "ollama" else self.translation_engine.upper()
-            self.btn_request_ai.configure(text=f"✨ {eng_name}")
+        eng_name = self.ollama_model if self.translation_engine == "ollama" else self.translation_engine.upper()
+        self.btn_request_ai.configure(text=f"✨ {eng_name}")
 
     def translate_active_row_ai(self):
         self._translate_active_row_custom(engine=self.translation_engine, button_ref=self.btn_request_ai)
@@ -2828,11 +3079,12 @@ class ModernTranslatorApp(ctk.CTk):
         orig = self.ws_orig_box.get("1.0", tk.END).strip()
         if not orig: return
         lang = self.get_selected_lang_code()
+        row_id = self.selected_item_id
 
         eng_label = self.ollama_model if (engine == "ollama" and self.ollama_model) else engine.upper()
         orig_btn_txt = button_ref.cget("text") if button_ref else ""
         if button_ref:
-            button_ref.configure(text="⏳ Запрос...", state="disabled")
+            button_ref.configure(text=t("requesting"), state="disabled")
 
         def _worker():
             try:
@@ -2849,27 +3101,22 @@ class ModernTranslatorApp(ctk.CTk):
                 if button_ref:
                     button_ref.configure(text=orig_btn_txt, state="normal")
                     self.update_ai_btn_text()
-
+                if row_id != self.selected_item_id:
+                    return  # user moved to another row while the request was running
                 if ai_text:
-                    self.ws_trans_box.delete("1.0", tk.END)
-                    self.ws_trans_box.insert("1.0", ai_text)
-                    self._on_translation_modified()
-                    self._render_crowdin_suggestions(orig, ai_text, ai_res=ai_text, ai_engine=engine)
-                    self.toast_show(f"✓ Перевод получен от {eng_label}", "success", 2000)
+                    self._apply_text(ai_text)
+                    self._refresh_suggestions(orig, ai_text, ai_res=ai_text, ai_engine=engine)
+                    self.toast_show(t("toast_translated_by", engine=eng_label), "success", 2000)
 
             self.after(0, _finish)
 
         threading.Thread(target=_worker, daemon=True).start()
 
     def copy_from_orig(self):
-        orig = self.ws_orig_box.get("1.0", tk.END).strip()
-        self.ws_trans_box.delete("1.0", tk.END)
-        self.ws_trans_box.insert("1.0", orig)
-        self._on_translation_modified()
+        self._apply_text(self.ws_orig_box.get("1.0", tk.END).strip())
 
     def clear_active_translation(self):
-        self.ws_trans_box.delete("1.0", tk.END)
-        self._on_translation_modified()
+        self._apply_text("")
 
     def focus_editor(self):
         self.ws_trans_box.focus()
@@ -2878,15 +3125,15 @@ class ModernTranslatorApp(ctk.CTk):
         item = self.tree.identify_row(event.y)
         if item:
             self.tree.selection_set(item)
-            self.on_tree_select()
+            self._apply_selection()
 
-            menu = tk.Menu(self, tearoff=0, bg="#1e222b", fg="#f8fafc", activebackground="#0284c7")
-            menu.add_command(label="Редактировать (F2)", command=self.focus_editor)
-            menu.add_command(label="Перевести строку", command=self.translate_active_row)
-            menu.add_command(label="✂ Сократить перевод", command=self.apply_concise_suggestion)
+            menu = tk.Menu(self, tearoff=0, bg="#1e222b", fg=Theme.TEXT, activebackground=Theme.ACCENT)
+            menu.add_command(label=t("menu_edit"), command=self.focus_editor)
+            menu.add_command(label=t("menu_translate"), command=self.translate_active_row)
+            menu.add_command(label=t("menu_concise"), command=self.apply_concise_suggestion)
             menu.add_separator()
-            menu.add_command(label="Копировать оригинал", command=lambda: self.clipboard_clear() or self.clipboard_append(self.ws_orig_box.get("1.0", tk.END).strip()))
-            menu.add_command(label="Очистить перевод", command=self.clear_active_translation)
+            menu.add_command(label=t("menu_copy_orig"), command=lambda: self.clipboard_clear() or self.clipboard_append(self.ws_orig_box.get("1.0", tk.END).strip()))
+            menu.add_command(label=t("menu_clear"), command=self.clear_active_translation)
             menu.tk_popup(event.x_root, event.y_root)
 
     def get_selected_lang_code(self):
@@ -2896,47 +3143,49 @@ class ModernTranslatorApp(ctk.CTk):
 
     def on_lang_changed(self, choice):
         lang = self.get_selected_lang_code()
+        self.cfg["target_lang"] = lang
+        save_app_config(self.cfg)
         if self.project:
+            self._autosave()  # flush edits under the previous language first
             self.project.load_existing_translations(lang)
+            self._project_lang = lang
             self.apply_filter()
             self.update_stats()
+            if self.selected_item_id is not None:
+                self._apply_selection(force=True)
 
     # -------------------------------------------------------------
-    # Top-Bar Integrated Auto-Translate Progress (Image 1 feature!)
+    # Auto-translate (progress lives in the status bar)
     # -------------------------------------------------------------
 
     def start_auto_translate(self):
         if not self.project:
-            self.toast_show("Сначала выберите мод из библиотеки!", "warning")
+            self.toast_show(t("warn_pick_mod"), "warning")
             return
 
-        untrans = [s for s in self.project.strings if not self.project.translations.get(s["index"])]
+        project = self.project
+        untrans = [s for s in project.strings if not project.translations.get(s["index"])]
         if not untrans:
-            self.toast_show("Все строки уже переведены!", "info")
+            self.toast_show(t("warn_all_translated"), "info")
             return
 
         lang = self.get_selected_lang_code()
         total_count = len(untrans)
         self.cancel_translation_flag = False
-
         self.btn_translate.configure(state="disabled")
 
-        # Show top progress bar in the empty center space
-        self.top_progress_frame.pack(side=tk.LEFT, fill=tk.Y, expand=True, padx=16, pady=8)
+        self.top_progress_frame.pack(side=tk.RIGHT, padx=(0, 12), pady=3)
         self.top_progress_bar.set(0)
-        self.top_progress_lbl.configure(text=f"✨ {self.translation_engine.upper()}: 0/{total_count} (0%)")
+        engine = self.translation_engine.upper()
+        self.top_progress_lbl.configure(text=t("autotr_progress", engine=engine, done=0, total=total_count, pct=0))
 
         def _worker():
             def _prog(done, total, last_orig, last_trans):
                 pct = int(done / total * 100) if total > 0 else 0
                 sample = (last_orig[:11] + "…") if len(last_orig) > 11 else last_orig
-                self.after(0, lambda: [
-                    self.top_progress_bar.set(done / total),
-                    self.top_progress_lbl.configure(text=f"✨ {self.translation_engine.upper()}: {done}/{total} ({pct}%) • {sample}"),
-                    self.status_lbl.configure(text=f"Перевод: {done}/{total} строк...")
-                ])
+                self.after(0, lambda: self._autotr_progress(done, total, pct, engine, sample))
 
-            cnt = self.project.auto_translate(
+            cnt = project.auto_translate(
                 lang,
                 progress_callback=_prog,
                 cancel_check=lambda: self.cancel_translation_flag,
@@ -2948,163 +3197,212 @@ class ModernTranslatorApp(ctk.CTk):
                 custom_key=self.custom_key,
                 custom_model=self.custom_model
             )
-
-            self.after(0, lambda: [
-                self.apply_filter(),
-                self.update_stats(),
-                self.btn_translate.configure(state="normal"),
-                self.top_progress_lbl.configure(text=f"✓ Завершено: {cnt} строк!"),
-                self.after(2500, self.top_progress_frame.pack_forget),
-                self.toast_show(f"Автоперевод завершен! Переведено {cnt} строк.", "success", 3000)
-            ])
+            self.after(0, lambda: self._autotr_done(project, cnt))
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    def _autotr_progress(self, done, total, pct, engine, sample):
+        self.top_progress_bar.set(done / total if total else 0)
+        self.top_progress_lbl.configure(text=t("autotr_progress", engine=engine, done=done, total=total, pct=pct) + f" • {sample}")
+
+    def _autotr_done(self, project, cnt):
+        self.btn_translate.configure(state="normal")
+        self.top_progress_lbl.configure(text=t("autotr_done_lbl", count=cnt))
+        self.after(2500, self.top_progress_frame.pack_forget)
+        if project is self.project:
+            self.apply_filter()
+            self.update_stats()
+            if self.selected_item_id is not None:
+                self._apply_selection(force=True)
+        self.toast_show(t("autotr_done_toast", count=cnt), "success", 3000)
+
     def cancel_auto_translate(self):
         self.cancel_translation_flag = True
-        self.top_progress_lbl.configure(text="Остановка автоперевода...")
+        self.top_progress_lbl.configure(text=t("autotr_stopping"))
 
     # -------------------------------------------------------------
-    # Engine Settings Dialog with Ollama Dropdown & LLMLogs Manager
+    # Engine settings dialog
     # -------------------------------------------------------------
 
     def open_engine_settings(self):
         dlg = ctk.CTkToplevel(self)
         dlg.title(t("engine_settings_title"))
-        dlg.geometry("560x520")
+        dlg.geometry("580x720")
         dlg.transient(self)
-        dlg.grab_set()
         dlg.resizable(False, False)
+        dlg.after(100, lambda: dlg.winfo_exists() and dlg.grab_set())
 
-        frame = ctk.CTkFrame(dlg, fg_color="#111827", corner_radius=12)
+        frame = ctk.CTkFrame(dlg, fg_color=Theme.BAR, corner_radius=12)
         frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
 
-        ctk.CTkLabel(frame, text=t("engine_settings_title"), font=ctk.CTkFont(size=14, weight="bold"), text_color="#38bdf8").pack(pady=(10, 6))
+        ctk.CTkLabel(frame, text=t("engine_settings_title"), font=self.F["title"], text_color=Theme.ACCENT_LIGHT).pack(pady=(10, 6))
 
         engine_var = ctk.StringVar(value=self.translation_engine)
+        for key, val in (("eng_google", "google"), ("eng_deepl", "deepl"), ("eng_ollama", "ollama"), ("eng_custom", "custom")):
+            ctk.CTkRadioButton(frame, text=t(key), variable=engine_var, value=val).pack(anchor="w", padx=24, pady=3)
 
-        ctk.CTkRadioButton(frame, text="Google NMT (Бесплатно, быстро, без ограничений)", variable=engine_var, value="google").pack(anchor="w", padx=24, pady=3)
-        ctk.CTkRadioButton(frame, text="DeepL Free / Pro API", variable=engine_var, value="deepl").pack(anchor="w", padx=24, pady=3)
-        ctk.CTkRadioButton(frame, text="Ollama / Локальный AI (qwen2.5, deepseek, llama3)", variable=engine_var, value="ollama").pack(anchor="w", padx=24, pady=3)
-        ctk.CTkRadioButton(frame, text="Custom OpenAI / OpenRouter API", variable=engine_var, value="custom").pack(anchor="w", padx=24, pady=3)
-
-        # DeepL Key
-        ctk.CTkLabel(frame, text="DeepL Auth Key (для DeepL API):", font=ctk.CTkFont(size=11)).pack(anchor="w", padx=24, pady=(8, 2))
-        ent_deepl = ctk.CTkEntry(frame, width=480, placeholder_text="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx")
+        ctk.CTkLabel(frame, text=t("lbl_deepl_key"), font=self.F["small"]).pack(anchor="w", padx=24, pady=(8, 2))
+        ent_deepl = ctk.CTkEntry(frame, width=500, placeholder_text="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx:fx")
         ent_deepl.insert(0, self.deepl_key)
         ent_deepl.pack(padx=24, pady=2)
 
-        # Ollama section with auto IP and Model dropdown
-        ctk.CTkLabel(frame, text="Ollama URL & Выбор установленной модели:", font=ctk.CTkFont(size=11, weight="bold"), text_color="#38bdf8").pack(anchor="w", padx=24, pady=(10, 2))
+        ctk.CTkLabel(frame, text=t("lbl_ollama"), font=self.F["small_b"], text_color=Theme.ACCENT_LIGHT).pack(anchor="w", padx=24, pady=(10, 2))
         f_ollama = ctk.CTkFrame(frame, fg_color="transparent")
         f_ollama.pack(fill=tk.X, padx=24, pady=2)
 
-        ent_ollama_url = ctk.CTkEntry(f_ollama, width=220)
+        ent_ollama_url = ctk.CTkEntry(f_ollama, width=230)
         ent_ollama_url.insert(0, self.ollama_url or "http://127.0.0.1:11434")
         ent_ollama_url.pack(side=tk.LEFT, padx=(0, 6))
 
-        ollama_models = fetch_ollama_models(ent_ollama_url.get().strip())
-        valid_models = [m for m in ollama_models if m != "Модели не найдены"]
-        current_m = self.ollama_model if self.ollama_model in valid_models else (valid_models[0] if valid_models else "Модели не найдены")
-        ollama_model_var = ctk.StringVar(value=current_m)
-
-        menu_ollama_model = ctk.CTkOptionMenu(f_ollama, variable=ollama_model_var, values=ollama_models, width=160)
+        ollama_model_var = ctk.StringVar(value=self.ollama_model or t("no_models"))
+        menu_ollama_model = ctk.CTkOptionMenu(f_ollama, variable=ollama_model_var, values=[self.ollama_model or t("no_models")], width=170)
         menu_ollama_model.pack(side=tk.LEFT, padx=3)
 
-        def _refresh_models():
-            m_list = fetch_ollama_models(ent_ollama_url.get().strip())
-            menu_ollama_model.configure(values=m_list)
-            v_list = [m for m in m_list if m != "Модели не найдены"]
-            if v_list:
-                ollama_model_var.set(v_list[0])
-            else:
-                ollama_model_var.set("Модели не найдены")
-            lbl_ollama_status.configure(text=f"Найдено моделей: {len(v_list)}")
+        lbl_ollama_status = ctk.CTkLabel(frame, text=t("lbl_models_loading"), font=self.F["tiny"], text_color=Theme.MUTED)
 
-        btn_refresh_m = ctk.CTkButton(f_ollama, text="🔄", width=32, command=_refresh_models)
-        btn_refresh_m.pack(side=tk.LEFT, padx=3)
+        def _load_models():
+            lbl_ollama_status.configure(text=t("lbl_models_loading"))
+            url = ent_ollama_url.get().strip()
 
-        lbl_ollama_status = ctk.CTkLabel(frame, text=f"Обнаружено моделей: {len(ollama_models)}", font=ctk.CTkFont(size=10), text_color="#94a3b8")
+            def _worker():
+                models = fetch_ollama_models(url)  # network/disk: never on the UI thread
+
+                def _apply():
+                    if not dlg.winfo_exists():
+                        return
+                    valid = [m for m in models if m != NO_MODELS_SENTINEL]
+                    menu_ollama_model.configure(values=valid or [t("no_models")])
+                    if valid:
+                        ollama_model_var.set(self.ollama_model if self.ollama_model in valid else valid[0])
+                    else:
+                        ollama_model_var.set(t("no_models"))
+                    lbl_ollama_status.configure(text=t("lbl_models_found", count=len(valid)))
+                self.after(0, _apply)
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        self._mk_btn(f_ollama, "🔄", _load_models, "ghost", width=34, height=28, font="reg").pack(side=tk.LEFT, padx=3)
         lbl_ollama_status.pack(anchor="w", padx=24, pady=(1, 4))
+        _load_models()
 
-        # LLMLogs Storage & Safe Cleanup Section (Requested by user!)
-        log_box = ctk.CTkFrame(frame, fg_color="#182234", corner_radius=8, border_width=1, border_color="#223048")
-        log_box.pack(fill=tk.X, padx=24, pady=(6, 10))
+        ctk.CTkLabel(frame, text=t("lbl_custom"), font=self.F["small_b"], text_color=Theme.ACCENT_LIGHT).pack(anchor="w", padx=24, pady=(8, 2))
+        ent_c_url = ctk.CTkEntry(frame, width=500, placeholder_text="https://api.openai.com/v1")
+        ent_c_url.insert(0, self.custom_url)
+        ent_c_url.pack(padx=24, pady=2)
+        f_c = ctk.CTkFrame(frame, fg_color="transparent")
+        f_c.pack(fill=tk.X, padx=24, pady=2)
+        ent_c_key = ctk.CTkEntry(f_c, width=300, show="•", placeholder_text="API key")
+        ent_c_key.insert(0, self.custom_key)
+        ent_c_key.pack(side=tk.LEFT, padx=(0, 6))
+        ent_c_model = ctk.CTkEntry(f_c, width=190, placeholder_text="gpt-4o-mini")
+        ent_c_model.insert(0, self.custom_model)
+        ent_c_model.pack(side=tk.LEFT)
 
+        log_box = ctk.CTkFrame(frame, fg_color=Theme.CARD, corner_radius=8, border_width=1, border_color=Theme.BORDER)
+        log_box.pack(fill=tk.X, padx=24, pady=(10, 10))
         log_top = ctk.CTkFrame(log_box, fg_color="transparent")
         log_top.pack(fill=tk.X, padx=10, pady=6)
 
         num_logs, sz_logs = get_llm_logs_info()
-        lbl_log_info = ctk.CTkLabel(
-            log_top,
-            text=f"📁 Папка LLMLogs: {num_logs} сессий ({sz_logs})",
-            font=ctk.CTkFont(size=11),
-            text_color="#e2e8f0"
-        )
+        lbl_log_info = ctk.CTkLabel(log_top, text=t("logs_info", count=num_logs, size=sz_logs), font=self.F["small"], text_color=Theme.TEXT_SOFT)
         lbl_log_info.pack(side=tk.LEFT)
 
         def _clear_logs():
             c = clear_llm_logs()
-            lbl_log_info.configure(text="📁 Папка LLMLogs: 0 сессий (0 KB)")
-            self.toast_show(f"Удалено {c} файлов логов LLM", "info")
+            lbl_log_info.configure(text=t("logs_info", count=0, size="0 KB"))
+            self.toast_show(t("toast_logs_cleared", count=c), "info")
 
-        btn_clear_log = ctk.CTkButton(log_top, text="🧹 Очистить логи LLM", width=130, height=26, fg_color="#475569", hover_color="#dc2626", command=_clear_logs)
-        btn_clear_log.pack(side=tk.RIGHT, padx=4)
+        def _open_logs():
+            if os.path.exists(LLMLOGS_DIR) and hasattr(os, "startfile"):
+                os.startfile(LLMLOGS_DIR)
 
-        btn_open_log = ctk.CTkButton(log_top, text="📂 Открыть папку", width=110, height=26, fg_color="#334155", hover_color="#475569", command=lambda: os.startfile(LLMLOGS_DIR) if os.path.exists(LLMLOGS_DIR) else None)
-        btn_open_log.pack(side=tk.RIGHT, padx=4)
+        self._mk_btn(log_top, t("btn_clear_logs"), _clear_logs, "muted", width=130, height=26, font="small", hover_color="#dc2626").pack(side=tk.RIGHT, padx=4)
+        self._mk_btn(log_top, t("btn_open_logs"), _open_logs, "muted", width=110, height=26, font="small").pack(side=tk.RIGHT, padx=4)
 
         def _save():
             self.translation_engine = engine_var.get()
             self.deepl_key = ent_deepl.get().strip()
             self.ollama_url = ent_ollama_url.get().strip()
-            self.ollama_model = ollama_model_var.get().strip()
+            chosen = ollama_model_var.get().strip()
+            if chosen and chosen not in (t("no_models"), NO_MODELS_SENTINEL):
+                self.ollama_model = chosen
+            self.custom_url = ent_c_url.get().strip() or self.custom_url
+            self.custom_key = ent_c_key.get().strip()
+            self.custom_model = ent_c_model.get().strip() or self.custom_model
 
-            self.cfg["engine"] = self.translation_engine
-            self.cfg["deepl_api_key"] = self.deepl_key
-            self.cfg["ollama_url"] = self.ollama_url
-            self.cfg["ollama_model"] = self.ollama_model
+            self.cfg.update({
+                "engine": self.translation_engine,
+                "deepl_api_key": self.deepl_key,
+                "ollama_url": self.ollama_url,
+                "ollama_model": self.ollama_model,
+                "custom_api_url": self.custom_url,
+                "custom_api_key": self.custom_key,
+                "custom_api_model": self.custom_model,
+            })
             save_app_config(self.cfg)
 
             self.btn_engine.configure(text=f"🌐 {self.translation_engine.upper()}")
-            if hasattr(self, "update_ai_btn_text"): self.update_ai_btn_text()
+            self.update_ai_btn_text()
             dlg.destroy()
-            self.toast_show("Настройки движка сохранены!", "success")
+            self.toast_show(t("toast_settings_saved"), "success")
 
-        ctk.CTkButton(frame, text="Сохранить настройки", width=160, height=34, fg_color="#16a34a", hover_color="#15803d", font=ctk.CTkFont(size=12, weight="bold"), command=_save).pack(pady=(4, 10))
+        self._mk_btn(frame, t("btn_save_settings"), _save, "success", width=180, height=36).pack(pady=(4, 10))
 
     # -------------------------------------------------------------
-    # Build & Install to Game Operations
+    # Build & install (run in the background: StringPatcher can take seconds)
     # -------------------------------------------------------------
+
+    def _run_bg(self, busy_text, work, on_done):
+        self.btn_build.configure(state="disabled")
+        self.btn_install.configure(state="disabled")
+        self._set_busy(True, busy_text)
+
+        def _worker():
+            res, err = None, None
+            try:
+                res = work()
+            except Exception as ex:
+                err = ex
+
+            def _finish():
+                self._set_busy(False)
+                self.btn_build.configure(state="normal")
+                self.btn_install.configure(state="normal")
+                on_done(res, err)
+            self.after(0, _finish)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def do_build(self):
         if not self.project:
-            self.toast_show("Сначала выберите мод!", "warning")
+            self.toast_show(t("warn_pick_mod"), "warning")
             return
         lang = self.get_selected_lang_code()
-        try:
-            res = self.project.build(lang)
-            self.toast_show(f"Сборка успешна: {res[:60]}", "success")
-        except Exception as ex:
-            self.toast_show(f"Ошибка сборки: {ex}", "error")
+        project = self.project
+
+        def _done(res, err):
+            if err is not None:
+                self.toast_show(t("err_build", err=err), "error", 5000)
+            else:
+                self.toast_show(t("toast_build_ok", res=str(res)[:60]), "success")
+
+        self._run_bg(t("building"), lambda: project.build(lang), _done)
 
     def do_install(self):
         if not self.project:
-            self.toast_show("Сначала выберите мод!", "warning")
+            self.toast_show(t("warn_pick_mod"), "warning")
             return
         lang = self.get_selected_lang_code()
-        try:
-            dest = self.project.install_to_game(lang)
-            self.toast_show(f"Установлен в Mods/ с маркировкой [RU]: {os.path.basename(dest)}", "success", 4000)
-            self.refresh_mod_library()
-        except Exception as ex:
-            self.toast_show(f"Ошибка установки в Mods/: {ex}", "error")
+        project = self.project
 
-    def toast_show(self, msg, level="info", duration_ms=2500):
-        prefix = "✓ " if level == "success" else ("⚠️ " if level == "warning" else ("❌ " if level == "error" else "ℹ️ "))
-        color = "#10b981" if level == "success" else ("#f59e0b" if level == "warning" else ("#ef4444" if level == "error" else "#38bdf8"))
-        self.status_lbl.configure(text=prefix + msg, text_color=color)
-        self.after(duration_ms, lambda: self.status_lbl.configure(text_color="#94a3b8"))
+        def _done(res, err):
+            if err is not None:
+                self.toast_show(t("err_install", err=err), "error", 5000)
+            else:
+                self.toast_show(t("toast_installed", lang=lang.upper(), name=os.path.basename(res)), "success", 4000)
+                self.refresh_mod_library()
+
+        self._run_bg(t("installing"), lambda: project.install_to_game(lang), _done)
 
 def main():
     parser = argparse.ArgumentParser(description="ProbablyTranslator - Universal Mod Localization Studio")
