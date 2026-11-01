@@ -21,6 +21,7 @@ import json
 import csv
 import re
 import time
+import math
 import shutil
 import tempfile
 import uuid
@@ -41,7 +42,7 @@ from tkinter import ttk, filedialog
 from tkinter import font as tkfont
 import customtkinter as ctk
 
-APP_VERSION = "2.6.0"
+APP_VERSION = "2.7.0"
 
 # Appearance theme
 ctk.set_appearance_mode("Dark")
@@ -1647,6 +1648,64 @@ class Theme:
     }
 
 
+def _hex_to_rgb(h):
+    h = h.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def lerp_color(c1, c2, t):
+    """Linear blend between two #rrggbb colors (t in 0..1)."""
+    a, b = _hex_to_rgb(c1), _hex_to_rgb(c2)
+    return "#%02x%02x%02x" % tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+
+
+def ease_out_cubic(t):
+    return 1 - (1 - t) ** 3
+
+
+def ease_in_out(t):
+    return t * t * (3 - 2 * t)
+
+
+class Animator:
+    """Tiny time-based tween engine on top of Tk's after(); one running tween per key.
+
+    Time-based (not frame-counted), so animations keep their duration even if a frame is dropped."""
+
+    def __init__(self, widget):
+        self.w = widget
+        self.jobs = {}
+
+    def run(self, key, duration_ms, step, done=None, ease=ease_out_cubic):
+        self.cancel(key)
+        start = time.perf_counter()
+
+        def tick():
+            p = min(1.0, (time.perf_counter() - start) * 1000.0 / max(duration_ms, 1))
+            try:
+                step(ease(p))
+            except tk.TclError:
+                self.jobs.pop(key, None)
+                return
+            if p >= 1.0:
+                self.jobs.pop(key, None)
+                if done:
+                    done()
+            else:
+                self.jobs[key] = self.w.after(15, tick)
+        tick()
+
+    def cancel(self, key):
+        job = self.jobs.pop(key, None)
+        if job is not None:
+            try: self.w.after_cancel(job)
+            except Exception: pass
+
+    def cancel_all(self):
+        for key in list(self.jobs):
+            self.cancel(key)
+
+
 NO_MODELS_SENTINEL = "Модели не найдены"
 
 
@@ -1681,6 +1740,8 @@ class ModLibraryView(tk.Frame):
         self.scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
+        self.anim = Animator(self)
+        self._card_ids = []
         self.mods = []
         self.active = None
         self.message = ("", "")
@@ -1702,10 +1763,33 @@ class ModLibraryView(tk.Frame):
         return int(v * self.k)
 
     # ---- data ----
-    def set_mods(self, mods, active_norm=None):
+    def set_mods(self, mods, active_norm=None, animate=False):
         self.mods = mods
         self.active = active_norm
         self.redraw()
+        if animate:
+            self._fade_in_cards()
+
+    def _fade_in_cards(self):
+        """Staggered fade-in of the first cards (colors blend from the panel background)."""
+        c = self.canvas
+        for i, ids in enumerate(self._card_ids[:14]):
+            finals = []
+            for it in ids:
+                for opt in ("fill", "outline"):
+                    try: col = c.itemcget(it, opt)
+                    except tk.TclError: continue
+                    if isinstance(col, str) and col.startswith("#"):
+                        finals.append((it, opt, col))
+            for it, opt, col in finals:
+                c.itemconfigure(it, **{opt: Theme.PANEL})
+
+            def start(i=i, finals=finals):
+                def step(p):
+                    for it, opt, col in finals:
+                        c.itemconfigure(it, **{opt: lerp_color(Theme.PANEL, col, p)})
+                self.anim.run(f"card{i}", 300, step)
+            self.after(i * 32, start)
 
     def set_active(self, active_norm):
         if active_norm != self.active:
@@ -1759,8 +1843,10 @@ class ModLibraryView(tk.Frame):
     def redraw(self):
         self._redraw_job = None
         c = self.canvas
+        self.anim.cancel_all()
         c.delete("all")
         self._rects = []
+        self._card_ids = []
         self._hover = -1
         w = max(c.winfo_width(), self.s(220))
 
@@ -1780,6 +1866,7 @@ class ModLibraryView(tk.Frame):
         for i, m in enumerate(self.mods):
             y1 = self._pad + i * (self._card_h + self._gap)
             y2 = y1 + self._card_h
+            n0 = len(c.find_all())
             active = m.get("_norm") == self.active
             rect = self._round_rect(x1, y1, x2, y2, self.s(8),
                                     fill=Theme.CARD_ACTIVE if active else Theme.CARD,
@@ -1814,6 +1901,7 @@ class ModLibraryView(tk.Frame):
                 sub_color = Theme.MUTED
             c.create_text(tx, y1 + self.s(58), anchor="w", font=self.f_meta, fill=sub_color,
                           text=self._fit(sub, self.f_meta, max_w))
+            self._card_ids.append(c.find_all()[n0:])
 
         total = self._pad * 2 + len(self.mods) * self._card_h + (len(self.mods) - 1) * self._gap
         c.configure(scrollregion=(0, 0, w, total))
@@ -1836,13 +1924,22 @@ class ModLibraryView(tk.Frame):
         old = self._hover
         if 0 <= old < len(self._rects):
             rect, active = self._rects[old]
-            c.itemconfigure(rect, fill=Theme.CARD_ACTIVE if active else Theme.CARD)
+            self._fade_rect(rect, Theme.CARD_ACTIVE if active else Theme.CARD)
         if 0 <= i < len(self._rects):
             rect, active = self._rects[i]
             if not active:
-                c.itemconfigure(rect, fill=Theme.CARD_HOVER)
+                self._fade_rect(rect, Theme.CARD_HOVER)
         c.configure(cursor="hand2" if i >= 0 else "")
         self._hover = i
+
+    def _fade_rect(self, rect, to):
+        c = self.canvas
+        try: frm = c.itemcget(rect, "fill")
+        except tk.TclError: return
+        if not (isinstance(frm, str) and frm.startswith("#")):
+            c.itemconfigure(rect, fill=to)
+            return
+        self.anim.run(f"h{rect}", 130, lambda p: c.itemconfigure(rect, fill=lerp_color(frm, to, p)))
 
     def _on_motion(self, e):
         self._set_hover(self._index_at(self.canvas.canvasy(e.y)))
@@ -1870,7 +1967,7 @@ class ModernTranslatorApp(ctk.CTk):
 
         self.title(t("app_title"))
         self.geometry("1420x890")
-        self.minsize(1180, 750)
+        self.minsize(1280, 750)
 
         if os.path.exists(ICON_FILE):
             try: self.iconbitmap(ICON_FILE)
@@ -1910,6 +2007,11 @@ class ModernTranslatorApp(ctk.CTk):
         self._draft_cache = {}
         self._draft_pending = set()
         self._lib_query_cache = None
+        self.anim = Animator(self)
+        self._hover_row = None
+        self._ap_val = 0.0
+        self._total_val = 0.0
+        self._toast_y = 70
 
         self._make_fonts()
         self._init_ttk_styles()
@@ -1920,7 +2022,20 @@ class ModernTranslatorApp(ctk.CTk):
         self.update_idletasks()
         setup_native_drag_and_drop(self, self.on_files_dropped)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._build_toast()
         self.after(50, self.refresh_mod_library)
+        self._breathe()
+        try:
+            self.attributes("-alpha", 0.0)
+            self.after(30, self._fade_in_window)
+        except Exception:
+            pass
+
+    def _fade_in_window(self):
+        def _step(p):
+            try: self.attributes("-alpha", p)
+            except Exception: pass
+        self.anim.run("win", 260, _step)
 
     # -------------------------------------------------------------
     # Helpers
@@ -1979,14 +2094,59 @@ class ModernTranslatorApp(ctk.CTk):
             self.busy_bar.stop()
             self.busy_bar.pack_forget()
 
+    def _build_toast(self):
+        self.toast = ctk.CTkFrame(self, fg_color=Theme.CARD, corner_radius=14, border_width=1, border_color=Theme.LINE)
+        self.toast_bar = ctk.CTkFrame(self.toast, width=4, corner_radius=2, fg_color=Theme.ACCENT)
+        self.toast_bar.pack(side=tk.LEFT, fill=tk.Y, padx=(12, 0), pady=11)
+        self.toast_lbl = ctk.CTkLabel(self.toast, text="", font=self.F["small_b"], text_color=Theme.TEXT,
+                                      wraplength=int(620 * self.k), justify="left")
+        self.toast_lbl.pack(side=tk.LEFT, padx=(10, 18), pady=11)
+        self._toast_visible = False
+
+    def _toast_slide(self, to_y, done=None):
+        frm = self._toast_y
+
+        def _step(p):
+            self._toast_y = int(frm + (to_y - frm) * p)
+            self.toast.place(relx=0.5, rely=1.0, y=self._toast_y, anchor="s")
+        self.anim.run("toast", 260, _step, done=done)
+
     def toast_show(self, msg, level="info", duration_ms=2500):
-        prefix = {"success": "✓  ", "warning": "!  ", "error": "×  "}.get(level, "·  ")
+        """Floating snackbar: slides up above the status bar, then slides away."""
         color = {"success": Theme.OK, "warning": Theme.WARN, "error": Theme.ERR}.get(level, Theme.ACCENT_LIGHT)
-        self.status_lbl.configure(text=prefix + msg, text_color=color)
-        if self._toast_job:
-            try: self.after_cancel(self._toast_job)
-            except Exception: pass
-        self._toast_job = self.after(duration_ms, lambda: self.status_lbl.configure(text_color=Theme.MUTED))
+        self.toast_lbl.configure(text=msg)
+        self.toast_bar.configure(fg_color=color)
+        self.toast.configure(border_color=lerp_color(Theme.LINE, color, 0.45))
+        if not self._toast_visible:
+            self._toast_y = 70
+            self._toast_visible = True
+        self.toast.lift()
+        self._toast_slide(-46)
+        self._debounce("toast_hide", max(1200, duration_ms) + 400, self._toast_hide)
+
+    def _toast_hide(self):
+        def _gone():
+            self._toast_visible = False
+            self.toast.place_forget()
+        self._toast_slide(70, done=_gone)
+
+    def _fade_fg(self, btn, to, ms=170):
+        """Animated fg_color change for CTk buttons (filter chips, categories)."""
+        try: frm = btn.cget("fg_color")
+        except Exception: frm = to
+        if not (isinstance(frm, str) and frm.startswith("#")) or frm == to:
+            btn.configure(fg_color=to)
+            return
+        self.anim.run(f"fg{id(btn)}", ms, lambda p: btn.configure(fg_color=lerp_color(frm, to, p)))
+
+    def _breathe(self):
+        """Idle animation: the empty-state title gently pulses until a mod is loaded."""
+        if self.project is not None:
+            return
+        k = (math.sin(time.perf_counter() * 1.6) + 1) / 2
+        try: self.empty_title_lbl.configure(fg=lerp_color(Theme.DIM, Theme.TEXT, k))
+        except Exception: pass
+        self._jobs["breathe"] = self.after(70, self._breathe)
 
     def _on_close(self):
         try: self._autosave()
@@ -2130,6 +2290,22 @@ class ModernTranslatorApp(ctk.CTk):
 
         self.mod_badge = ctk.CTkLabel(left_grp, text="", font=self.F["small_b"], text_color=Theme.ACCENT_LIGHT)
         self.mod_badge.pack(side=tk.LEFT, padx=10)
+        self._left_grp = left_grp
+
+        # Auto-translate progress sits in the free space of the top bar (between the two clusters)
+        self.top_progress_frame = ctk.CTkFrame(self.top_bar, height=38, fg_color=Theme.CARD, corner_radius=12,
+                                               border_width=1, border_color=Theme.ACCENT)
+        self.top_progress_frame.pack_propagate(False)
+        self.top_progress_lbl = ctk.CTkLabel(self.top_progress_frame, text="", width=150, anchor="w", font=self.F["small_b"], text_color=Theme.TEXT)
+        self.top_progress_lbl.pack(side=tk.LEFT, padx=(14, 6))
+        self.btn_top_cancel = self._mk_btn(self.top_progress_frame, "■", self.cancel_auto_translate, "danger", width=30, height=26, font="tiny_b")
+        self.btn_top_cancel.pack(side=tk.RIGHT, padx=(6, 6))
+        CTooltip(self.btn_top_cancel, lambda: t("tooltip_stop_autotr"))
+        self.top_progress_pct = ctk.CTkLabel(self.top_progress_frame, text="0%", width=44, anchor="e", font=self.F["small_b"], text_color=Theme.ACCENT_LIGHT)
+        self.top_progress_pct.pack(side=tk.RIGHT, padx=(6, 0))
+        self.top_progress_bar = ctk.CTkProgressBar(self.top_progress_frame, height=8, corner_radius=4, fg_color=Theme.PANEL, progress_color=Theme.ACCENT)
+        self.top_progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        self.top_progress_bar.set(0)
 
     def switch_ui_lang(self, lang_code):
         global CURRENT_UI_LANG
@@ -2306,11 +2482,15 @@ class ModernTranslatorApp(ctk.CTk):
 
         self.tree.tag_configure("even", background=Theme.PANEL, foreground=Theme.TEXT)
         self.tree.tag_configure("odd", background=Theme.ROW_ODD, foreground=Theme.TEXT)
+        self.tree.tag_configure("hover", background="#1a2036")
+        self.tree.tag_configure("flash", background="#14532d")
 
         # Arrow keys already emit <<TreeviewSelect>>; the old extra <Up>/<Down> binds ran the heavy handler twice.
         self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
         self.tree.bind("<Button-3>", self.on_tree_right_click)
         self.tree.bind("<F2>", lambda e: self.focus_editor())
+        self.tree.bind("<Motion>", self._on_tree_motion)
+        self.tree.bind("<Leave>", lambda e: self._set_hover_row(None))
 
         # Empty state (shown until a mod is loaded). Created now so Win32 drag&drop covers it too.
         self.empty_state = tk.Frame(table_container, bg=Theme.PANEL)
@@ -2320,8 +2500,46 @@ class ModernTranslatorApp(ctk.CTk):
         self.empty_sub_lbl.pack()
         self._update_empty_state()
 
+    def _row_tags(self, iid):
+        tags = self.tree.item(iid, "tags")
+        if isinstance(tags, str):
+            tags = tags.split()
+        return tuple(tg for tg in tags if tg not in ("hover", "flash"))
+
+    def _set_hover_row(self, iid):
+        if iid == self._hover_row:
+            return
+        old = self._hover_row
+        if old is not None and self.tree.exists(old):
+            self.tree.item(old, tags=self._row_tags(old))
+        self._hover_row = None
+        if iid and iid not in self.tree.selection():
+            self.tree.item(iid, tags=self._row_tags(iid) + ("hover",))
+            self._hover_row = iid
+
+    def _on_tree_motion(self, e):
+        self._set_hover_row(self.tree.identify_row(e.y) or None)
+
+    def _flash_row(self, iid):
+        """Green pulse on a row that was just saved; fades into the zebra background."""
+        if not self.tree.exists(iid):
+            return
+        base = self._row_tags(iid)
+        row_bg = Theme.PANEL if "even" in base else Theme.ROW_ODD
+        self.tree.item(iid, tags=base + ("flash",))
+
+        def _step(p):
+            self.tree.tag_configure("flash", background=lerp_color("#1b6b45", row_bg, p))
+
+        def _done():
+            if self.tree.exists(iid):
+                self.tree.item(iid, tags=self._row_tags(iid))
+        self.anim.run("flash", 650, _step, done=_done)
+
     def _update_empty_state(self):
         if self.project is None:
+            if "breathe" not in self._jobs or not self._jobs["breathe"]:
+                self._breathe()
             self.empty_state.place(relx=0.5, rely=0.45, anchor="center")
             self.empty_state.lift()
         else:
@@ -2483,29 +2701,27 @@ class ModernTranslatorApp(ctk.CTk):
         self.total_bar.set(0)
         self.total_bar.pack(side=tk.RIGHT, padx=(0, 4))
 
-        # Auto-translate progress lives here (the top bar had no room for it at the minimum window width)
-        self.top_progress_frame = ctk.CTkFrame(self.status_bar, height=26, fg_color=Theme.CARD, corner_radius=8, border_width=1, border_color=Theme.ACCENT)
-        self.top_progress_lbl = ctk.CTkLabel(self.top_progress_frame, text="", width=230, anchor="w", font=self.F["tiny_b"], text_color=Theme.TEXT)
-        self.top_progress_lbl.pack(side=tk.LEFT, padx=(10, 8))
-        self.top_progress_bar = ctk.CTkProgressBar(self.top_progress_frame, width=150, height=8, fg_color=Theme.PANEL, progress_color=Theme.OK)
-        self.top_progress_bar.pack(side=tk.LEFT, padx=4)
-        self.top_progress_bar.set(0)
-        self.btn_top_cancel = self._mk_btn(self.top_progress_frame, "■", self.cancel_auto_translate, "danger", width=28, height=20, font="tiny_b")
-        self.btn_top_cancel.pack(side=tk.LEFT, padx=(6, 6), pady=2)
-        CTooltip(self.btn_top_cancel, lambda: t("tooltip_stop_autotr"))
-
     # -------------------------------------------------------------
     # Mod library
     # -------------------------------------------------------------
 
     def toggle_library(self):
         self.show_library = not self.show_library
-        if self.show_library:
-            self.lib_frame.pack(side=tk.LEFT, fill=tk.Y, before=self.center_frame)
-        else:
-            self.lib_frame.pack_forget()
         self.cfg["show_library"] = self.show_library
         save_app_config(self.cfg)
+
+        def _w(width):
+            self.lib_frame.configure(width=max(1, int(width)))
+
+        if self.show_library:
+            _w(1)
+            self.lib_frame.pack(side=tk.LEFT, fill=tk.Y, before=self.center_frame)
+            self.anim.run("lib", 240, lambda p: _w(1 + 299 * p))
+        else:
+            def _gone():
+                self.lib_frame.pack_forget()
+                _w(300)
+            self.anim.run("lib", 200, lambda p: _w(300 - 299 * p), done=_gone, ease=ease_in_out)
 
     def refresh_mod_library(self):
         self._scan_token += 1
@@ -2525,21 +2741,21 @@ class ModernTranslatorApp(ctk.CTk):
                     return
                 self.installed_mods = mods
                 self.btn_toggle_lib.configure(text=t("btn_mods", count=len(mods)))
-                self.render_library()
+                self.render_library(animate=True)
             self.after(0, _apply_ui)
         threading.Thread(target=_scan_worker, daemon=True).start()
 
     def set_lib_filter(self, cat):
         self.lib_filter = cat
-        self.btn_cat_all.configure(fg_color=Theme.ACCENT if cat == "all" else Theme.FIELD)
-        self.btn_cat_ws.configure(fg_color=Theme.ACCENT if cat == "workshop" else Theme.FIELD)
-        self.btn_cat_mods.configure(fg_color=Theme.ACCENT if cat == "mods" else Theme.FIELD)
-        self.render_library()
+        self._fade_fg(self.btn_cat_all, Theme.ACCENT if cat == "all" else Theme.FIELD)
+        self._fade_fg(self.btn_cat_ws, Theme.ACCENT if cat == "workshop" else Theme.FIELD)
+        self._fade_fg(self.btn_cat_mods, Theme.ACCENT if cat == "mods" else Theme.FIELD)
+        self.render_library(animate=True)
 
     def _active_norm(self):
         return os.path.normcase(self.project.mod_path) if self.project else None
 
-    def render_library(self):
+    def render_library(self, animate=False):
         q = self.lib_search_entry.get().strip().lower()
         filtered = []
         for m in self.installed_mods:
@@ -2550,7 +2766,7 @@ class ModernTranslatorApp(ctk.CTk):
             filtered.append(m)
 
         if filtered:
-            self.lib_view.set_mods(filtered, self._active_norm())
+            self.lib_view.set_mods(filtered, self._active_norm(), animate=animate)
         elif self.installed_mods:
             self.lib_view.set_message(t("lib_no_match"))
         else:
@@ -2640,10 +2856,10 @@ class ModernTranslatorApp(ctk.CTk):
 
     def set_table_filter(self, flt):
         self.current_filter = flt
-        self.btn_filter_all.configure(fg_color=Theme.ACCENT if flt == "all" else Theme.FIELD)
-        self.btn_filter_untrans.configure(fg_color=Theme.ACCENT if flt == "untranslated" else Theme.FIELD)
-        self.btn_filter_overflow.configure(fg_color=Theme.ACCENT if flt == "overflow" else Theme.FIELD)
-        self.btn_filter_diff.configure(fg_color=Theme.ACCENT if flt == "diff" else Theme.FIELD)
+        self._fade_fg(self.btn_filter_all, Theme.ACCENT if flt == "all" else Theme.FIELD)
+        self._fade_fg(self.btn_filter_untrans, Theme.ACCENT if flt == "untranslated" else Theme.FIELD)
+        self._fade_fg(self.btn_filter_overflow, Theme.ACCENT if flt == "overflow" else Theme.FIELD)
+        self._fade_fg(self.btn_filter_diff, Theme.ACCENT if flt == "diff" else Theme.FIELD)
         self.apply_filter()
 
     def sort_new_to_top(self):
@@ -2661,6 +2877,7 @@ class ModernTranslatorApp(ctk.CTk):
         self._filter_gen += 1  # any chunked insert still in flight becomes stale (it used to cause duplicate-iid errors)
         gen = self._filter_gen
 
+        self._hover_row = None
         children = self.tree.get_children()
         if children:
             self.tree.delete(*children)
@@ -2738,7 +2955,13 @@ class ModernTranslatorApp(ctk.CTk):
         done = sum(1 for s in self.project.strings if trans_map.get(s["index"]))
         pct = int(done / total * 100) if total > 0 else 0
         self.stats_lbl.configure(text=t("stats_summary", total=total, done=done, pct=pct))
-        self.total_bar.set(done / total if total else 0)
+        target = done / total if total else 0
+        frm = self._total_val
+
+        def _bar(p):
+            self._total_val = frm + (target - frm) * p
+            self.total_bar.set(self._total_val)
+        self.anim.run("total", 380, _bar)
         self.status_lbl.configure(text=t("status_ready", trans=done, total=total, pct=pct))
 
     # -------------------------------------------------------------
@@ -2831,9 +3054,9 @@ class ModernTranslatorApp(ctk.CTk):
             src.pack(fill=tk.X, padx=8, pady=(0, 4))
             row = {"frame": frame, "top": top, "txt": txt, "kbd": kbd, "src": src, "text": ""}
             for w in (frame, top, txt, kbd, src):
-                w.bind("<Enter>", lambda e, r=row: self._paint_sugg(r, Theme.FIELD))
-                w.bind("<Leave>", lambda e, r=row: self._paint_sugg(r, Theme.PANEL))
-                w.bind("<Button-1>", lambda e, r=row: self._apply_text(r["text"]))
+                w.bind("<Enter>", lambda e, r=row: self._fade_sugg(r, Theme.FIELD, 110))
+                w.bind("<Leave>", lambda e, r=row: self._fade_sugg(r, Theme.PANEL, 160))
+                w.bind("<Button-1>", lambda e, r=row: self._click_sugg(r))
             self._sugg_rows.append(row)
 
         self._sugg_empty = tk.Label(c, text="", bg=Theme.BAR, fg=Theme.DIM, font=self.tkF["sugg_src"], anchor="w")
@@ -2843,6 +3066,18 @@ class ModernTranslatorApp(ctk.CTk):
         wrap = max(120, event.width - int(90 * self.k))
         for row in self._sugg_rows:
             row["txt"].configure(wraplength=wrap)
+
+    def _fade_sugg(self, row, to, ms):
+        try: frm = row["frame"].cget("bg")
+        except Exception: frm = to
+        if not (isinstance(frm, str) and frm.startswith("#")):
+            self._paint_sugg(row, to)
+            return
+        self.anim.run(f"sg{id(row)}", ms, lambda p: self._paint_sugg(row, lerp_color(frm, to, p)))
+
+    def _click_sugg(self, row):
+        self._apply_text(row["text"])
+        self.anim.run(f"sg{id(row)}", 420, lambda p: self._paint_sugg(row, lerp_color(Theme.ACCENT, Theme.FIELD, p)))
 
     def _paint_sugg(self, row, color):
         for key in ("frame", "top", "txt", "kbd", "src"):
@@ -3014,6 +3249,7 @@ class ModernTranslatorApp(ctk.CTk):
             values[3] = _disp(trans)
             values[4] = status_badge
             self.tree.item(self.selected_item_id, values=values)
+            self._flash_row(self.selected_item_id)
 
         self.update_stats()
 
@@ -3182,10 +3418,8 @@ class ModernTranslatorApp(ctk.CTk):
         self.cancel_translation_flag = False
         self.btn_translate.configure(state="disabled")
 
-        self.top_progress_frame.pack(side=tk.RIGHT, padx=(0, 12), pady=3)
-        self.top_progress_bar.set(0)
         engine = self.translation_engine.upper()
-        self.top_progress_lbl.configure(text=t("autotr_progress", engine=engine, done=0, total=total_count, pct=0))
+        self._show_top_progress(engine, total_count)
 
         def _worker():
             def _prog(done, total, last_orig, last_trans):
@@ -3209,14 +3443,41 @@ class ModernTranslatorApp(ctk.CTk):
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    def _show_top_progress(self, engine, total):
+        self.mod_badge.pack_forget()  # free the space for the progress card
+        self._ap_val = 0.0
+        self.top_progress_bar.set(0)
+        self.top_progress_bar.configure(progress_color=Theme.ACCENT)
+        self.top_progress_frame.configure(border_color=Theme.ACCENT)
+        self.top_progress_lbl.configure(text=f"{engine}  0/{total}")
+        self.top_progress_pct.configure(text="0%")
+        self.btn_top_cancel.configure(state="normal")
+        self.top_progress_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=16, pady=12)
+
+    def _hide_top_progress(self):
+        self.top_progress_frame.pack_forget()
+        self.mod_badge.pack(side=tk.LEFT, padx=10)
+
     def _autotr_progress(self, done, total, pct, engine, sample):
-        self.top_progress_bar.set(done / total if total else 0)
-        self.top_progress_lbl.configure(text=t("autotr_progress", engine=engine, done=done, total=total, pct=pct) + f" • {sample}")
+        self.top_progress_lbl.configure(text=f"{engine}  {done}/{total}")
+        self.top_progress_pct.configure(text=f"{pct}%")
+        target = done / total if total else 0
+        frm = self._ap_val
+
+        def _step(p):
+            self._ap_val = frm + (target - frm) * p
+            self.top_progress_bar.set(self._ap_val)
+        self.anim.run("autobar", 320, _step)
 
     def _autotr_done(self, project, cnt):
         self.btn_translate.configure(state="normal")
         self.top_progress_lbl.configure(text=t("autotr_done_lbl", count=cnt))
-        self.after(2500, self.top_progress_frame.pack_forget)
+        self.top_progress_pct.configure(text="100%")
+        self.top_progress_bar.configure(progress_color=Theme.OK)
+        self.top_progress_frame.configure(border_color=Theme.OK)
+        frm = self._ap_val
+        self.anim.run("autobar", 300, lambda p: self.top_progress_bar.set(frm + (1 - frm) * p))
+        self.after(2600, self._hide_top_progress)
         if project is self.project:
             self.apply_filter()
             self.update_stats()
@@ -3226,6 +3487,7 @@ class ModernTranslatorApp(ctk.CTk):
 
     def cancel_auto_translate(self):
         self.cancel_translation_flag = True
+        self.btn_top_cancel.configure(state="disabled")
         self.top_progress_lbl.configure(text=t("autotr_stopping"))
 
     # -------------------------------------------------------------
