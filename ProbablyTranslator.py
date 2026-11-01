@@ -42,7 +42,7 @@ from tkinter import ttk, filedialog
 from tkinter import font as tkfont
 import customtkinter as ctk
 
-APP_VERSION = "2.7.0"
+APP_VERSION = "2.8.0"
 
 # Appearance theme
 ctk.set_appearance_mode("Dark")
@@ -1716,6 +1716,498 @@ def _disp(text):
     return text
 
 
+def canvas_round_rect(c, x1, y1, x2, y2, r, **kw):
+    """Rounded rectangle on a Tk canvas (smoothed polygon)."""
+    r = max(0, min(r, (x2 - x1) / 2, (y2 - y1) / 2))
+    pts = [x1 + r, y1, x1 + r, y1, x2 - r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y1 + r, x2, y2 - r,
+           x2, y2 - r, x2, y2, x2 - r, y2, x2 - r, y2, x1 + r, y2, x1 + r, y2, x1, y2, x1, y2 - r,
+           x1, y2 - r, x1, y1 + r, x1, y1 + r, x1, y1]
+    return c.create_polygon(pts, smooth=True, **kw)
+
+
+class SlimScrollbar(tk.Canvas):
+    """Thin rounded overlay-style scrollbar: no arrows, thumb grows and brightens on hover."""
+
+    def __init__(self, master, command, scale=1.0, bg=None):
+        self.k = scale
+        super().__init__(master, width=int(12 * scale), bg=bg or Theme.PANEL, bd=0, highlightthickness=0)
+        self.command = command
+        self.first, self.last = 0.0, 1.0
+        self._hv = 0.0
+        self._drag = None
+        self.anim = Animator(self)
+        self.bind("<Configure>", lambda e: self._draw())
+        self.bind("<Enter>", lambda e: self._hover(1.0))
+        self.bind("<Leave>", lambda e: self._hover(0.0) if self._drag is None else None)
+        self.bind("<ButtonPress-1>", self._press)
+        self.bind("<B1-Motion>", self._motion)
+        self.bind("<ButtonRelease-1>", self._release)
+
+    def set(self, first, last):
+        self.first, self.last = float(first), float(last)
+        self._draw()
+
+    def _hover(self, target):
+        frm = self._hv
+
+        def _step(p):
+            self._hv = frm + (target - frm) * p
+            self._draw()
+        self.anim.run("hv", 160, _step)
+
+    def _geom(self):
+        h = max(self.winfo_height(), 1)
+        y1, y2 = self.first * h, self.last * h
+        if y2 - y1 < 32 * self.k:
+            y2 = y1 + 32 * self.k
+            if y2 > h:
+                y2, y1 = h, h - 32 * self.k
+        return h, y1, y2
+
+    def _draw(self):
+        self.delete("all")
+        if self.last - self.first >= 0.999:
+            return
+        h, y1, y2 = self._geom()
+        w = max(self.winfo_width(), int(12 * self.k))
+        tw = int((5 + 4 * self._hv) * self.k)
+        color = lerp_color(Theme.LINE, Theme.ACCENT_LIGHT if self._drag else Theme.ACCENT, 0.15 + 0.85 * self._hv) if self._hv > 0 or self._drag else Theme.LINE
+        x = w / 2
+        r = tw / 2
+        self.create_line(x, y1 + r, x, y2 - r, width=tw, capstyle="round", fill=color)
+
+    def _press(self, e):
+        h, y1, y2 = self._geom()
+        if y1 <= e.y <= y2:
+            self._drag = (e.y, self.first)
+        else:
+            span = self.last - self.first
+            self.command("moveto", max(0.0, min(1.0 - span, e.y / h - span / 2)))
+        self._draw()
+
+    def _motion(self, e):
+        if self._drag is None:
+            return
+        h = max(self.winfo_height(), 1)
+        self.command("moveto", self._drag[1] + (e.y - self._drag[0]) / h)
+
+    def _release(self, e):
+        self._drag = None
+        self._draw()
+
+
+STATUS_STYLES = {
+    # kind: (fill, border, text)
+    "new": ("#1b1f4a", "#6366f1", "#a5b4fc"),
+    "changed": ("#3a2a07", "#f59e0b", "#fbbf24"),
+    "long": ("#3b1d08", "#f97316", "#fdba74"),
+    "ok": ("#052e1f", "#10b981", "#34d399"),
+    "empty": ("#1a1f2a", "#3a4358", "#98a1b5"),
+}
+
+
+class StringTable(tk.Frame):
+    """Virtualized canvas table (replaces ttk.Treeview).
+
+    Only the visible rows are drawn, so any number of strings opens instantly; rows get hover/selection
+    fades, smooth wheel scrolling, a save flash, and the status column is drawn as real rounded tags."""
+
+    def __init__(self, master, scale=1.0, on_select=None, on_context=None, on_activate=None):
+        super().__init__(master, bg=Theme.PANEL, bd=0, highlightthickness=0)
+        self.k = scale
+        self.on_select = on_select or (lambda iid: None)
+        self.on_context = on_context or (lambda iid, x, y: None)
+        self.on_activate = on_activate or (lambda iid: None)
+        self.anim = Animator(self)
+
+        fam = "Segoe UI"
+        self.f_cell = tkfont.Font(family=fam, size=-int(13 * scale))
+        self.f_head = tkfont.Font(family=fam, size=-int(11 * scale), weight="bold")
+        self.f_pill = tkfont.Font(family=fam, size=-int(10 * scale), weight="bold")
+        self.f_num = tkfont.Font(family=fam, size=-int(12 * scale))
+
+        self.row_h = int(40 * scale)
+        self.head_h = int(38 * scale)
+        self.w_num, self.w_type, self.w_status = int(54 * scale), int(70 * scale), int(150 * scale)
+        self.split = 0.5
+
+        self.heads = {"num": "#", "type": "Type", "original": "Original", "translation": "Translation", "status": "Status"}
+        self.rows = []
+        self.order = []
+        self.index = {}
+        self.sel = None
+        self.hover = None
+        self._top = 0.0
+        self._target = 0.0
+        self._sel_p = 1.0
+        self._hover_mix = {}
+        self._flash = {}
+        self._reveal = None   # elapsed seconds of the "rows cascade in" effect, None when idle
+        self._pending = None
+        self._fit_cache = {}
+        self._cache_w = 0
+        self._drag_split = False
+
+        self.head = tk.Canvas(self, height=self.head_h, bg=Theme.HEAD, bd=0, highlightthickness=0)
+        self.head.pack(side=tk.TOP, fill=tk.X)
+        body = tk.Frame(self, bg=Theme.PANEL, bd=0, highlightthickness=0)
+        body.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.sb = SlimScrollbar(body, command=self._sb_command, scale=scale)
+        self.sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.canvas = tk.Canvas(body, bg=Theme.PANEL, bd=0, highlightthickness=0, takefocus=1)
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        c = self.canvas
+        c.bind("<Configure>", self._on_resize)
+        c.bind("<Motion>", self._on_motion)
+        c.bind("<Leave>", lambda e: self._set_hover(None))
+        c.bind("<Button-1>", self._on_click)
+        c.bind("<Double-Button-1>", self._on_double)
+        c.bind("<Button-3>", self._on_right)
+        c.bind("<MouseWheel>", self._on_wheel)
+        c.bind("<Up>", lambda e: self._key_move(-1))
+        c.bind("<Down>", lambda e: self._key_move(1))
+        c.bind("<Prior>", lambda e: self._key_move(-self._page()))
+        c.bind("<Next>", lambda e: self._key_move(self._page()))
+        c.bind("<Home>", lambda e: self._key_move(-10 ** 9))
+        c.bind("<End>", lambda e: self._key_move(10 ** 9))
+        self.head.bind("<Configure>", lambda e: self._draw_head())
+        self.head.bind("<Motion>", self._head_motion)
+        self.head.bind("<B1-Motion>", self._head_drag)
+        self.head.bind("<ButtonRelease-1>", lambda e: setattr(self, "_drag_split", False))
+        self.head.bind("<ButtonPress-1>", self._head_press)
+
+    # ---------------- public API ----------------
+    @property
+    def selected(self):
+        return self.sel
+
+    def set_headings(self, **kw):
+        self.heads.update(kw)
+        self._draw_head()
+
+    def set_rows(self, rows, reset=False, animate=False):
+        """rows: iterable of (iid, num, type, original, translation, kind, label)."""
+        self.rows = [dict(iid=r[0], num=r[1], type=r[2], orig=r[3], trans=r[4], kind=r[5], label=r[6]) for r in rows]
+        self.order = [r["iid"] for r in self.rows]
+        self.index = {iid: i for i, iid in enumerate(self.order)}
+        self._fit_cache.clear()
+        self._hover_mix.clear()
+        self.hover = None
+        if self.sel not in self.index:
+            self.sel = None
+        if reset:
+            self.anim.cancel("scroll")
+            self._top = self._target = 0.0
+        if animate:
+            self._start_reveal()
+        self.invalidate()
+
+    def exists(self, iid):
+        return iid in self.index
+
+    def pos(self, iid):
+        return self.index.get(iid)
+
+    def update_row(self, iid, trans, kind, label):
+        i = self.index.get(iid)
+        if i is None:
+            return
+        self.rows[i].update(trans=trans, kind=kind, label=label)
+        self._fit_cache.clear()
+        self.invalidate()
+
+    def select(self, iid, see=True):
+        if iid not in self.index:
+            return
+        changed = iid != self.sel
+        self.sel = iid
+        if changed:
+            self._sel_p = 0.0
+
+            def _step(p):
+                self._sel_p = p
+                self.invalidate()
+            self.anim.run("sel", 180, _step)
+        if see:
+            self.see(iid)
+        self.invalidate()
+
+    def see(self, iid):
+        i = self.index.get(iid)
+        if i is None:
+            return
+        h = max(self.canvas.winfo_height(), 1)
+        top = i * self.row_h
+        if top < self._target:
+            self._scroll_to(top)
+        elif top + self.row_h > self._target + h:
+            self._scroll_to(top + self.row_h - h)
+
+    def flash(self, iid):
+        def _step(p):
+            self._flash[iid] = 1.0 - p
+            self.invalidate()
+
+        def _done():
+            self._flash.pop(iid, None)
+            self.invalidate()
+        self.anim.run(f"fl{iid}", 700, _step, done=_done)
+
+    # ---------------- geometry ----------------
+    def _cols(self):
+        w = max(self.canvas.winfo_width(), int(400 * self.k))
+        rest = max(w - self.w_num - self.w_type - self.w_status, int(240 * self.k))
+        w_orig = int(rest * self.split)
+        x_num = 0
+        x_type = x_num + self.w_num
+        x_orig = x_type + self.w_type
+        x_trans = x_orig + w_orig
+        x_status = x_trans + (rest - w_orig)
+        return w, x_num, x_type, x_orig, x_trans, x_status
+
+    def _fit(self, text, max_w, font):
+        key = (text, max_w)
+        hit = self._fit_cache.get(key)
+        if hit is not None:
+            return hit
+        if font.measure(text) <= max_w:
+            res = text
+        else:
+            lo, hi = 0, len(text)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if font.measure(text[:mid] + "…") <= max_w:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            res = text[:lo] + "…"
+        if len(self._fit_cache) > 4000:
+            self._fit_cache.clear()
+        self._fit_cache[key] = res
+        return res
+
+    # ---------------- drawing ----------------
+    def _draw_head(self):
+        h = self.head
+        h.delete("all")
+        w, x_num, x_type, x_orig, x_trans, x_status = self._cols()
+        cy = self.head_h / 2
+        pad = int(14 * self.k)
+        kw = dict(font=self.f_head, fill=Theme.MUTED)
+        h.create_text(x_num + self.w_num / 2, cy, text=self.heads["num"], **kw)
+        h.create_text(x_type + self.w_type / 2, cy, text=self.heads["type"], **kw)
+        h.create_text(x_orig + pad, cy, text=self.heads["original"], anchor="w", **kw)
+        h.create_text(x_trans + pad, cy, text=self.heads["translation"], anchor="w", **kw)
+        h.create_text(x_status + self.w_status / 2, cy, text=self.heads["status"], **kw)
+        h.create_line(x_trans, self.head_h * 0.3, x_trans, self.head_h * 0.7, fill=Theme.LINE)
+        h.create_line(0, self.head_h - 1, w, self.head_h - 1, fill=Theme.BORDER)
+
+    def invalidate(self):
+        if self._pending is None:
+            self._pending = self.after_idle(self._redraw)
+
+    def _start_reveal(self):
+        t0 = time.perf_counter()
+
+        def _step(p):
+            self._reveal = (time.perf_counter() - t0)
+            self.invalidate()
+
+        def _done():
+            self._reveal = None
+            self.invalidate()
+        self.anim.run("reveal", 900, _step, done=_done, ease=lambda x: x)
+
+    def _redraw(self):
+        self._pending = None
+        c = self.canvas
+        c.delete("all")
+        H = c.winfo_height()
+        rh = self.row_h
+        total = len(self.rows) * rh
+        self._top = max(0.0, min(self._top, max(0, total - H)))
+        first = int(self._top // rh)
+        last = min(len(self.rows), int((self._top + H) // rh) + 2)
+        cols = self._cols()
+        for i in range(first, last):
+            self._draw_row(i, i * rh - self._top, cols, first)
+        if total <= H or total == 0:
+            self.sb.set(0.0, 1.0)
+        else:
+            self.sb.set(self._top / total, min(1.0, (self._top + H) / total))
+
+    def _draw_row(self, i, y0, cols, first):
+        c = self.canvas
+        row = self.rows[i]
+        iid = row["iid"]
+        W, x_num, x_type, x_orig, x_trans, x_status = cols
+        rh = self.row_h
+        y1 = y0 + rh
+        cy = y0 + rh / 2
+
+        # entrance cascade: colors blend in from the panel background, staggered by row
+        fade = 1.0
+        if self._reveal is not None:
+            fade = max(0.0, min(1.0, (self._reveal - (i - first) * 0.035) / 0.25))
+        base_bg = Theme.PANEL if i % 2 == 0 else Theme.ROW_ODD
+        bg = base_bg
+        hv = self._hover_mix.get(iid, 0.0)
+        if hv > 0:
+            bg = lerp_color(bg, "#1a2036", hv)
+        selected = iid == self.sel
+        if selected:
+            bg = lerp_color(bg, Theme.SELECT, self._sel_p)
+        fl = self._flash.get(iid, 0.0)
+        if fl > 0:
+            bg = lerp_color(bg, "#1b6b45", fl)
+
+        def col(color):
+            return color if fade >= 1.0 else lerp_color(Theme.PANEL, color, fade)
+
+        c.create_rectangle(0, y0, W, y1, fill=bg if fade >= 1.0 else lerp_color(Theme.PANEL, bg, fade), outline="")
+        if selected:
+            bar_h = (rh - self.row_h * 0.3) * self._sel_p
+            c.create_rectangle(0, cy - bar_h / 2, int(3 * self.k), cy + bar_h / 2, fill=Theme.ACCENT_LIGHT, outline="")
+
+        pad = int(14 * self.k)
+        c.create_text(x_num + self.w_num / 2, cy, text=str(row["num"]), font=self.f_num, fill=col(Theme.DIM))
+
+        tkind = "csv" if row["type"] == "CSV" else "dll"
+        tfill, tborder, tfg = Theme.PILLS[tkind]
+        ttext = row["type"]
+        tw = self.f_pill.measure(ttext) + int(14 * self.k)
+        th = int(18 * self.k)
+        tx = x_type + (self.w_type - tw) / 2
+        canvas_round_rect(c, tx, cy - th / 2, tx + tw, cy + th / 2, th / 2, fill=col(tfill), outline=col(tborder))
+        c.create_text(tx + tw / 2, cy, text=ttext, font=self.f_pill, fill=col(tfg))
+
+        max_o = x_trans - x_orig - pad * 2
+        c.create_text(x_orig + pad, cy, anchor="w", font=self.f_cell, fill=col("#ffffff" if selected else Theme.TEXT),
+                      text=self._fit(_disp(row["orig"]), max_o, self.f_cell))
+        if row["trans"]:
+            max_t = x_status - x_trans - pad * 2
+            c.create_text(x_trans + pad, cy, anchor="w", font=self.f_cell, fill=col(Theme.TEXT_SOFT),
+                          text=self._fit(_disp(row["trans"]), max_t, self.f_cell))
+
+        pfill, pborder, pfg = STATUS_STYLES.get(row["kind"], STATUS_STYLES["empty"])
+        label = row["label"]
+        pw = self.f_pill.measure(label) + int(22 * self.k)
+        ph = int(22 * self.k)
+        px = x_status + (self.w_status - pw) / 2
+        canvas_round_rect(c, px, cy - ph / 2, px + pw, cy + ph / 2, ph / 2, fill=col(pfill), outline=col(pborder))
+        c.create_text(px + pw / 2, cy, text=label, font=self.f_pill, fill=col(pfg))
+
+    # ---------------- scrolling ----------------
+    def _sb_command(self, *args):
+        total = len(self.rows) * self.row_h
+        H = self.canvas.winfo_height()
+        if args and args[0] == "moveto" and total > H:
+            self.anim.cancel("scroll")
+            self._top = self._target = float(args[1]) * total
+            self.invalidate()
+
+    def _scroll_to(self, target, ms=170):
+        total = len(self.rows) * self.row_h
+        H = self.canvas.winfo_height()
+        target = max(0.0, min(float(target), max(0, total - H)))
+        self._target = target
+        frm = self._top
+
+        def _step(p):
+            self._top = frm + (target - frm) * p
+            self.invalidate()
+        self.anim.run("scroll", ms, _step)
+
+    def _on_wheel(self, e):
+        step = self.row_h * 3 * (-1 if e.delta > 0 else 1)
+        self._scroll_to(self._target + step, 190)
+        self._on_motion(e)
+
+    def _page(self):
+        return max(1, int(self.canvas.winfo_height() // self.row_h) - 1)
+
+    # ---------------- interaction ----------------
+    def _row_at(self, y):
+        i = int((y + self._top) // self.row_h)
+        return self.order[i] if 0 <= i < len(self.order) else None
+
+    def _set_hover(self, iid):
+        if iid == self.hover:
+            return
+        old, self.hover = self.hover, iid
+        for target_iid, to in ((old, 0.0), (iid, 1.0)):
+            if target_iid is None:
+                continue
+            frm = self._hover_mix.get(target_iid, 0.0)
+
+            def _step(p, k=target_iid, frm=frm, to=to):
+                self._hover_mix[k] = frm + (to - frm) * p
+                self.invalidate()
+            self.anim.run(f"hv{target_iid}", 140, _step)
+        self.canvas.configure(cursor="hand2" if iid else "")
+
+    def _on_motion(self, e):
+        self._set_hover(self._row_at(e.y))
+
+    def _on_click(self, e):
+        self.canvas.focus_set()
+        iid = self._row_at(e.y)
+        if iid:
+            self.select(iid, see=False)
+            self.on_select(iid)
+
+    def _on_double(self, e):
+        iid = self._row_at(e.y)
+        if iid:
+            self.on_activate(iid)
+
+    def _on_right(self, e):
+        iid = self._row_at(e.y)
+        if iid:
+            self.select(iid, see=False)
+            self.on_context(iid, e.x_root, e.y_root)
+
+    def _key_move(self, delta):
+        if not self.order:
+            return "break"
+        if self.sel in self.index:
+            nxt = max(0, min(len(self.order) - 1, self.index[self.sel] + delta))
+        else:
+            nxt = 0 if delta > 0 else len(self.order) - 1
+        self.select(self.order[nxt], see=True)
+        self.on_select(self.order[nxt])
+        return "break"
+
+    def _on_resize(self, e):
+        if abs(e.width - self._cache_w) >= 2:
+            self._cache_w = e.width
+            self._fit_cache.clear()
+            self._draw_head()
+        self.invalidate()
+
+    # ---------------- header: draggable original/translation divider ----------------
+    def _divider_x(self):
+        return self._cols()[4]
+
+    def _head_motion(self, e):
+        near = abs(e.x - self._divider_x()) < int(6 * self.k)
+        self.head.configure(cursor="sb_h_double_arrow" if near else "")
+
+    def _head_press(self, e):
+        self._drag_split = abs(e.x - self._divider_x()) < int(6 * self.k)
+
+    def _head_drag(self, e):
+        if not self._drag_split:
+            return
+        w, x_num, x_type, x_orig, x_trans, x_status = self._cols()
+        rest = max(w - self.w_num - self.w_type - self.w_status, 1)
+        self.split = max(0.2, min(0.8, (e.x - x_orig) / rest))
+        self._fit_cache.clear()
+        self._draw_head()
+        self.invalidate()
+
+
 class ModLibraryView(tk.Frame):
     """Mod library drawn on ONE canvas.
 
@@ -1735,7 +2227,7 @@ class ModLibraryView(tk.Frame):
         self.f_msg = tkfont.Font(family=fam, size=-int(12 * scale))
 
         self.canvas = tk.Canvas(self, bg=Theme.PANEL, bd=0, highlightthickness=0, yscrollincrement=int(24 * scale))
-        self.scroll = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.canvas.yview, style="Crowdin.Vertical.TScrollbar")
+        self.scroll = SlimScrollbar(self, command=lambda *a: self.canvas.yview(*a), scale=scale)
         self.canvas.configure(yscrollcommand=self.scroll.set)
         self.scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -1947,6 +2439,9 @@ class ModLibraryView(tk.Frame):
     def _on_click(self, e):
         i = self._index_at(self.canvas.canvasy(e.y))
         if i >= 0:
+            if i < len(self._rects):
+                self.canvas.itemconfigure(self._rects[i][0], fill=Theme.ACCENT)
+                self._fade_rect(self._rects[i][0], Theme.CARD_ACTIVE if self._rects[i][1] else Theme.CARD_HOVER)
             self.on_open(self.mods[i]["path"])
 
     def _on_wheel(self, e):
@@ -1997,7 +2492,6 @@ class ModernTranslatorApp(ctk.CTk):
 
         # runtime state
         self._jobs = {}            # debounce timers by key
-        self._filter_gen = 0       # invalidates stale chunked table inserts
         self._load_token = 0       # invalidates stale background mod loads
         self._scan_token = 0
         self._toast_job = None
@@ -2008,10 +2502,13 @@ class ModernTranslatorApp(ctk.CTk):
         self._draft_pending = set()
         self._lib_query_cache = None
         self.anim = Animator(self)
-        self._hover_row = None
         self._ap_val = 0.0
         self._total_val = 0.0
-        self._toast_y = 70
+        self._toast_y = 60
+        self._chip_kind = None
+        self._chip_cols = (Theme.FIELD, Theme.LINE)
+        self._shown_done = 0
+        self._ap_active = False
 
         self._make_fonts()
         self._init_ttk_styles()
@@ -2052,6 +2549,8 @@ class ModernTranslatorApp(ctk.CTk):
             "tiny_b": ctk.CTkFont(family=ff, size=10, weight="bold"),
             "title": ctk.CTkFont(family=ff, size=14, weight="bold"),
             "mono": ctk.CTkFont(family="Consolas", size=10),
+            "status": ctk.CTkFont(family=ff, size=12),
+            "status_b": ctk.CTkFont(family=ff, size=12, weight="bold"),
         }
         # plain-tk fonts (pooled widgets): explicit pixel sizes scaled for DPI
         self.tkF = {
@@ -2095,12 +2594,12 @@ class ModernTranslatorApp(ctk.CTk):
             self.busy_bar.pack_forget()
 
     def _build_toast(self):
-        self.toast = ctk.CTkFrame(self, fg_color=Theme.CARD, corner_radius=14, border_width=1, border_color=Theme.LINE)
-        self.toast_bar = ctk.CTkFrame(self.toast, width=4, corner_radius=2, fg_color=Theme.ACCENT)
-        self.toast_bar.pack(side=tk.LEFT, fill=tk.Y, padx=(12, 0), pady=11)
-        self.toast_lbl = ctk.CTkLabel(self.toast, text="", font=self.F["small_b"], text_color=Theme.TEXT,
-                                      wraplength=int(620 * self.k), justify="left")
-        self.toast_lbl.pack(side=tk.LEFT, padx=(10, 18), pady=11)
+        self.toast = ctk.CTkFrame(self, fg_color=Theme.CARD, corner_radius=12, border_width=1, border_color=Theme.LINE)
+        self.toast_bar = ctk.CTkFrame(self.toast, width=4, height=14, corner_radius=2, fg_color=Theme.ACCENT)
+        self.toast_bar.pack(side=tk.LEFT, padx=(10, 0), pady=8)
+        self.toast_lbl = ctk.CTkLabel(self.toast, text="", font=self.F["small"], text_color=Theme.TEXT,
+                                      wraplength=int(440 * self.k), justify="left")
+        self.toast_lbl.pack(side=tk.LEFT, padx=(8, 14), pady=6)
         self._toast_visible = False
 
     def _toast_slide(self, to_y, done=None):
@@ -2118,17 +2617,17 @@ class ModernTranslatorApp(ctk.CTk):
         self.toast_bar.configure(fg_color=color)
         self.toast.configure(border_color=lerp_color(Theme.LINE, color, 0.45))
         if not self._toast_visible:
-            self._toast_y = 70
+            self._toast_y = 60
             self._toast_visible = True
         self.toast.lift()
-        self._toast_slide(-46)
+        self._toast_slide(-50)
         self._debounce("toast_hide", max(1200, duration_ms) + 400, self._toast_hide)
 
     def _toast_hide(self):
         def _gone():
             self._toast_visible = False
             self.toast.place_forget()
-        self._toast_slide(70, done=_gone)
+        self._toast_slide(60, done=_gone)
 
     def _fade_fg(self, btn, to, ms=170):
         """Animated fg_color change for CTk buttons (filter chips, categories)."""
@@ -2333,10 +2832,8 @@ class ModernTranslatorApp(ctk.CTk):
         self.render_library()
 
         # Table
-        self.tree.heading("type", text=t("col_type"))
-        self.tree.heading("original", text=t("col_original"))
-        self.tree.heading("translation", text=t("col_translation"))
-        self.tree.heading("status", text=t("col_status"))
+        self.table.set_headings(type=t("col_type"), original=t("col_original"),
+                                translation=t("col_translation"), status=t("col_status"))
         self.search_entry.configure(placeholder_text=t("search_strings_placeholder"))
         self.btn_filter_all.configure(text=t("filter_all"))
         self.btn_sort_new.configure(text=t("btn_new_to_top"))
@@ -2440,7 +2937,7 @@ class ModernTranslatorApp(ctk.CTk):
             fg_color=Theme.FIELD, border_color=Theme.LINE
         )
         self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.search_entry.bind("<KeyRelease>", lambda e: self._debounce("tsearch", 180, self.apply_filter))
+        self.search_entry.bind("<KeyRelease>", lambda e: self._debounce("tsearch", 180, lambda: self.apply_filter(reset=True)))
 
         row2 = ctk.CTkFrame(filter_bar, fg_color="transparent")
         row2.pack(fill=tk.X, padx=12, pady=(0, 10))
@@ -2459,38 +2956,14 @@ class ModernTranslatorApp(ctk.CTk):
         table_container.pack(fill=tk.BOTH, expand=True)
         self.table_container = table_container
 
-        cols = ("#", "type", "original", "translation", "status")
-        self.tree = ttk.Treeview(table_container, columns=cols, show="headings", style="Crowdin.Treeview", selectmode="browse")
-
-        self.tree.heading("#", text="#")
-        self.tree.heading("type", text=t("col_type"))
-        self.tree.heading("original", text=t("col_original"))
-        self.tree.heading("translation", text=t("col_translation"))
-        self.tree.heading("status", text=t("col_status"))
-
-        self.tree.column("#", width=int(48 * self.k), minwidth=40, anchor="center", stretch=False)
-        self.tree.column("type", width=int(58 * self.k), minwidth=50, anchor="center", stretch=False)
-        self.tree.column("original", width=int(240 * self.k), minwidth=120, stretch=True)
-        self.tree.column("translation", width=int(240 * self.k), minwidth=120, stretch=True)
-        self.tree.column("status", width=int(120 * self.k), minwidth=100, anchor="center", stretch=False)
-
-        scroll_y = ttk.Scrollbar(table_container, orient=tk.VERTICAL, command=self.tree.yview, style="Crowdin.Vertical.TScrollbar")
-        self.tree.configure(yscrollcommand=scroll_y.set)
-
-        scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        self.tree.tag_configure("even", background=Theme.PANEL, foreground=Theme.TEXT)
-        self.tree.tag_configure("odd", background=Theme.ROW_ODD, foreground=Theme.TEXT)
-        self.tree.tag_configure("hover", background="#1a2036")
-        self.tree.tag_configure("flash", background="#14532d")
-
-        # Arrow keys already emit <<TreeviewSelect>>; the old extra <Up>/<Down> binds ran the heavy handler twice.
-        self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
-        self.tree.bind("<Button-3>", self.on_tree_right_click)
-        self.tree.bind("<F2>", lambda e: self.focus_editor())
-        self.tree.bind("<Motion>", self._on_tree_motion)
-        self.tree.bind("<Leave>", lambda e: self._set_hover_row(None))
+        self.table = StringTable(table_container, scale=self.k,
+                                 on_select=lambda iid: self.on_tree_select(),
+                                 on_context=self.on_table_context,
+                                 on_activate=lambda iid: self.focus_editor())
+        self.table.pack(fill=tk.BOTH, expand=True)
+        self.table.set_headings(num="#", type=t("col_type"), original=t("col_original"),
+                                translation=t("col_translation"), status=t("col_status"))
+        self.table.canvas.bind("<F2>", lambda e: self.focus_editor())
 
         # Empty state (shown until a mod is loaded). Created now so Win32 drag&drop covers it too.
         self.empty_state = tk.Frame(table_container, bg=Theme.PANEL)
@@ -2499,42 +2972,6 @@ class ModernTranslatorApp(ctk.CTk):
         self.empty_sub_lbl = tk.Label(self.empty_state, text=t("empty_sub"), bg=Theme.PANEL, fg=Theme.DIM, font=self.tkF["empty_s"], wraplength=int(380 * self.k), justify="center")
         self.empty_sub_lbl.pack()
         self._update_empty_state()
-
-    def _row_tags(self, iid):
-        tags = self.tree.item(iid, "tags")
-        if isinstance(tags, str):
-            tags = tags.split()
-        return tuple(tg for tg in tags if tg not in ("hover", "flash"))
-
-    def _set_hover_row(self, iid):
-        if iid == self._hover_row:
-            return
-        old = self._hover_row
-        if old is not None and self.tree.exists(old):
-            self.tree.item(old, tags=self._row_tags(old))
-        self._hover_row = None
-        if iid and iid not in self.tree.selection():
-            self.tree.item(iid, tags=self._row_tags(iid) + ("hover",))
-            self._hover_row = iid
-
-    def _on_tree_motion(self, e):
-        self._set_hover_row(self.tree.identify_row(e.y) or None)
-
-    def _flash_row(self, iid):
-        """Green pulse on a row that was just saved; fades into the zebra background."""
-        if not self.tree.exists(iid):
-            return
-        base = self._row_tags(iid)
-        row_bg = Theme.PANEL if "even" in base else Theme.ROW_ODD
-        self.tree.item(iid, tags=base + ("flash",))
-
-        def _step(p):
-            self.tree.tag_configure("flash", background=lerp_color("#1b6b45", row_bg, p))
-
-        def _done():
-            if self.tree.exists(iid):
-                self.tree.item(iid, tags=self._row_tags(iid))
-        self.anim.run("flash", 650, _step, done=_done)
 
     def _update_empty_state(self):
         if self.project is None:
@@ -2555,7 +2992,7 @@ class ModernTranslatorApp(ctk.CTk):
         self.ws_context_title = ctk.CTkLabel(hdr, text=t("context_title"), font=self.F["small_b"], text_color=Theme.MUTED)
         self.ws_context_title.pack(side=tk.LEFT)
 
-        self.ws_status_chip = ctk.CTkFrame(hdr, fg_color=Theme.FIELD, corner_radius=10, border_width=1, border_color="#64748b")
+        self.ws_status_chip = ctk.CTkFrame(hdr, fg_color=Theme.FIELD, corner_radius=12, border_width=1, border_color="#64748b")
         self.ws_status_chip.pack(side=tk.RIGHT)
         self.ws_status_badge = ctk.CTkLabel(self.ws_status_chip, text=t("badge_empty"), font=self.F["tiny_b"], text_color=Theme.MUTED, padx=8, pady=2)
         self.ws_status_badge.pack()
@@ -2572,7 +3009,8 @@ class ModernTranslatorApp(ctk.CTk):
         self.ws_orig_len_lbl = ctk.CTkLabel(orig_top, text=t("char_count", lang="cn", count=0), font=self.F["tiny"], text_color=Theme.MUTED)
         self.ws_orig_len_lbl.pack(side=tk.RIGHT)
 
-        self.ws_orig_box = ctk.CTkTextbox(orig_card, height=56, font=self.F["small"], fg_color=Theme.PANEL, text_color=Theme.TEXT, wrap="word", border_width=0)
+        self.ws_orig_box = ctk.CTkTextbox(orig_card, height=56, font=self.F["small"], fg_color=Theme.PANEL, text_color=Theme.TEXT, wrap="word", border_width=0,
+                                      scrollbar_button_color=Theme.LINE, scrollbar_button_hover_color=Theme.ACCENT)
         self.ws_orig_box.pack(fill=tk.X, padx=8, pady=(0, 6))
         setup_textbox_clipboard(self.ws_orig_box, is_readonly=True)
 
@@ -2617,7 +3055,8 @@ class ModernTranslatorApp(ctk.CTk):
             CTooltip(chip, lambda c=chip: t("tooltip_insert_token", tok=c._tok))
             self._chip_pool.append(chip)
 
-        self.ws_trans_box = ctk.CTkTextbox(trans_card, height=90, font=self.F["reg"], fg_color=Theme.PANEL, text_color=Theme.TEXT, wrap="word", border_width=0)
+        self.ws_trans_box = ctk.CTkTextbox(trans_card, height=90, font=self.F["reg"], fg_color=Theme.PANEL, text_color=Theme.TEXT, wrap="word", border_width=0,
+                                       scrollbar_button_color=Theme.LINE, scrollbar_button_hover_color=Theme.ACCENT)
         self.ws_trans_box.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 4))
         setup_textbox_clipboard(self.ws_trans_box, is_readonly=False, on_modify=self._on_translation_modified)
         self.ws_trans_box.bind("<KeyRelease>", lambda e: self._debounce("modified", 40, self._on_translation_modified))
@@ -2685,19 +3124,19 @@ class ModernTranslatorApp(ctk.CTk):
         self.hotkeys_lbl.pack(pady=(0, 6))
 
     def _build_status_bar(self):
-        self.status_bar = ctk.CTkFrame(self, fg_color=Theme.BG, height=32, corner_radius=0)
+        self.status_bar = ctk.CTkFrame(self, fg_color=Theme.BG, height=38, corner_radius=0)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
         self.status_bar.pack_propagate(False)
 
-        self.status_lbl = ctk.CTkLabel(self.status_bar, text=t("status_ready", trans=0, total=0, pct=0), font=self.F["tiny"], text_color=Theme.MUTED)
+        self.status_lbl = ctk.CTkLabel(self.status_bar, text=t("status_ready", trans=0, total=0, pct=0), font=self.F["status"], text_color=Theme.MUTED)
         self.status_lbl.pack(side=tk.LEFT, padx=(12, 8))
 
         self.busy_bar = ctk.CTkProgressBar(self.status_bar, width=110, height=4, mode="indeterminate", fg_color=Theme.PANEL, progress_color=Theme.ACCENT_LIGHT)
 
-        self.stats_lbl = ctk.CTkLabel(self.status_bar, text="", font=self.F["tiny_b"], text_color=Theme.ACCENT_LIGHT)
+        self.stats_lbl = ctk.CTkLabel(self.status_bar, text="", font=self.F["status_b"], text_color=Theme.ACCENT_LIGHT)
         self.stats_lbl.pack(side=tk.RIGHT, padx=12)
 
-        self.total_bar = ctk.CTkProgressBar(self.status_bar, width=120, height=6, fg_color=Theme.PANEL, progress_color=Theme.OK)
+        self.total_bar = ctk.CTkProgressBar(self.status_bar, width=140, height=8, corner_radius=4, fg_color=Theme.PANEL, progress_color=Theme.OK)
         self.total_bar.set(0)
         self.total_bar.pack(side=tk.RIGHT, padx=(0, 4))
 
@@ -2824,6 +3263,8 @@ class ModernTranslatorApp(ctk.CTk):
             return
 
         self._autosave()  # persist edits of the previous mod
+        self._shown_done = 0
+        self._total_val = 0.0
         self.project = project
         self._project_lang = lang
         self._dirty = False
@@ -2833,10 +3274,11 @@ class ModernTranslatorApp(ctk.CTk):
         meta = project.manifest
         fmt = "CSV" if project.is_csv_mod else "DLL"
         self.mod_badge.configure(text=f"{meta['name']} • {meta['author']} [{fmt}]")
+        self.anim.run("badge", 450, lambda p: self.mod_badge.configure(text_color=lerp_color(Theme.BAR, Theme.ACCENT_LIGHT, p)))
 
         self.render_library()
         self._update_empty_state()
-        self.apply_filter()
+        self.apply_filter(reset=True, animate=True)
         self.update_stats()
 
         if project.new_strings_count > 0 and project.changed_strings_count + project.new_strings_count < len(project.strings):
@@ -2844,10 +3286,8 @@ class ModernTranslatorApp(ctk.CTk):
         else:
             self.toast_show(t("toast_loaded", name=meta['name'], count=count), "success", 2000)
 
-        children = self.tree.get_children()
-        if children:
-            self.tree.selection_set(children[0])
-            self.tree.focus(children[0])
+        if self.table.order:
+            self.table.select(self.table.order[0], see=False)
             self._apply_selection(force=True)
 
     # -------------------------------------------------------------
@@ -2860,12 +3300,12 @@ class ModernTranslatorApp(ctk.CTk):
         self._fade_fg(self.btn_filter_untrans, Theme.ACCENT if flt == "untranslated" else Theme.FIELD)
         self._fade_fg(self.btn_filter_overflow, Theme.ACCENT if flt == "overflow" else Theme.FIELD)
         self._fade_fg(self.btn_filter_diff, Theme.ACCENT if flt == "diff" else Theme.FIELD)
-        self.apply_filter()
+        self.apply_filter(reset=True, animate=True)
 
     def sort_new_to_top(self):
         if not self.project or not self.project.strings: return
         self.project.strings.sort(key=lambda s: 0 if s.get("status") in ("new", "changed") else 1)
-        self.apply_filter()
+        self.apply_filter(reset=True, animate=True)
         self.toast_show(t("toast_new_top"), "info")
 
     def _set_filter_counts(self, untrans, overflow, diff):
@@ -2873,24 +3313,22 @@ class ModernTranslatorApp(ctk.CTk):
         self.btn_filter_overflow.configure(text=f"{t('filter_overflow')} ({overflow})")
         self.btn_filter_diff.configure(text=f"{t('filter_diff')} ({diff})")
 
-    def apply_filter(self):
-        self._filter_gen += 1  # any chunked insert still in flight becomes stale (it used to cause duplicate-iid errors)
-        gen = self._filter_gen
+    def _status_for(self, st, is_overflow, trans):
+        if st == "new": return "new", t("badge_new")
+        if st == "changed": return "changed", t("badge_changed")
+        if is_overflow: return "long", t("badge_long")
+        if trans: return "ok", t("badge_ok")
+        return "empty", t("badge_empty")
 
-        self._hover_row = None
-        children = self.tree.get_children()
-        if children:
-            self.tree.delete(*children)
-
+    def apply_filter(self, reset=False, animate=False):
         if not self.project:
+            self.table.set_rows([], reset=True)
             self._set_filter_counts(0, 0, 0)
             return
 
         q = self.search_entry.get().strip().lower()
         flt = self.current_filter
         trans_map = self.project.translations
-        badge_new, badge_changed = t("badge_new"), t("badge_changed")
-        badge_long, badge_ok, badge_empty = t("badge_long"), t("badge_ok"), t("badge_empty")
 
         rows = []
         untrans_count = overflow_count = diff_count = 0
@@ -2916,52 +3354,33 @@ class ModernTranslatorApp(ctk.CTk):
             if q and q not in orig.lower() and q not in trans.lower() and q not in s.get("key", "").lower():
                 continue
 
-            if st == "new": badge = badge_new
-            elif st == "changed": badge = badge_changed
-            elif is_overflow: badge = badge_long
-            elif trans: badge = badge_ok
-            else: badge = badge_empty
-
-            rows.append((idx, s.get("type", "STR"), orig, trans, badge))
+            kind, label = self._status_for(st, is_overflow, trans)
+            rows.append((str(idx), len(rows) + 1, s.get("type", "STR"), orig, trans, kind, label))
 
         self._set_filter_counts(untrans_count, overflow_count, diff_count)
-        self._stream_rows(rows, 0, gen)
-
-    def _stream_rows(self, rows, start, gen):
-        """First chunk is inserted synchronously (instant paint), the rest streams in without blocking input."""
-        if gen != self._filter_gen:
-            return
-        end = min(start + (150 if start == 0 else 500), len(rows))
-        insert = self.tree.insert
-        for i in range(start, end):
-            idx, ftype, o_text, t_text, badge = rows[i]
-            insert("", tk.END, iid=str(idx), values=(i + 1, f"[{ftype}]", _disp(o_text), _disp(t_text), badge),
-                   tags=("even" if i % 2 == 0 else "odd",))
-
-        sel = self.selected_item_id
-        if sel is not None and not self.tree.selection() and self.tree.exists(sel):
-            self.tree.selection_set(sel)  # restore highlight; same iid => the handler skips the reload
-
-        if end < len(rows):
-            self.after(6, lambda: self._stream_rows(rows, end, gen))
+        self.table.set_rows(rows, reset=reset, animate=animate)
 
     def update_stats(self):
         if not self.project:
             self.stats_lbl.configure(text="")
             self.total_bar.set(0)
+            self._shown_done = 0
+            self._total_val = 0.0
             return
         total = len(self.project.strings)
         trans_map = self.project.translations
         done = sum(1 for s in self.project.strings if trans_map.get(s["index"]))
         pct = int(done / total * 100) if total > 0 else 0
-        self.stats_lbl.configure(text=t("stats_summary", total=total, done=done, pct=pct))
         target = done / total if total else 0
-        frm = self._total_val
+        frm, frm_d = self._total_val, self._shown_done
 
-        def _bar(p):
+        def _step(p):
             self._total_val = frm + (target - frm) * p
             self.total_bar.set(self._total_val)
-        self.anim.run("total", 380, _bar)
+            d = int(round(frm_d + (done - frm_d) * p))
+            self._shown_done = d
+            self.stats_lbl.configure(text=t("stats_summary", total=total, done=d, pct=int(d / total * 100) if total else 0))
+        self.anim.run("total", 420, _step)
         self.status_lbl.configure(text=t("status_ready", trans=done, total=total, pct=pct))
 
     # -------------------------------------------------------------
@@ -2991,9 +3410,8 @@ class ModernTranslatorApp(ctk.CTk):
 
     def _apply_selection(self, force=False):
         if not self.project: return
-        sel = self.tree.selection()
-        if not sel: return
-        item_id = sel[0]
+        item_id = self.table.selected
+        if item_id is None: return
         if item_id == self.selected_item_id and not force:
             return
         self.selected_item_id = item_id
@@ -3022,6 +3440,8 @@ class ModernTranslatorApp(ctk.CTk):
         self._render_placeholder_chips(orig)
         self._on_translation_modified()
         self._refresh_suggestions(orig, trans)
+        for box in (self.ws_orig_box, self.ws_trans_box):
+            self.anim.run(f"tx{id(box)}", 240, lambda p, b=box: b.configure(text_color=lerp_color(Theme.DIM, Theme.TEXT, p)))
 
     def _render_placeholder_chips(self, orig_text):
         for chip in self._chip_pool:
@@ -3196,16 +3616,21 @@ class ModernTranslatorApp(ctk.CTk):
             self.ws_overflow_alert.pack_forget()
             self._alert_visible = False
 
-        if trans:
-            if diag["is_overflow_risk"]:
-                self.ws_status_chip.configure(fg_color="#2a1e08", border_color=Theme.WARN)
-                self.ws_status_badge.configure(text=t("badge_long"), text_color="#fde68a")
-            else:
-                self.ws_status_chip.configure(fg_color="#064e3b", border_color=Theme.OK)
-                self.ws_status_badge.configure(text=t("badge_ok"), text_color="#6ee7b7")
-        else:
-            self.ws_status_chip.configure(fg_color=Theme.FIELD, border_color="#64748b")
-            self.ws_status_badge.configure(text=t("badge_empty"), text_color=Theme.MUTED)
+        kind, label = self._status_for("synced", diag["is_overflow_risk"], trans)
+        self._set_chip(kind, label)
+
+    def _set_chip(self, kind, label):
+        fill, border, fg = STATUS_STYLES[kind]
+        self.ws_status_badge.configure(text=label, text_color=fg)
+        if self._chip_kind == kind:
+            return
+        self._chip_kind = kind
+        f0, b0 = self._chip_cols
+
+        def _step(p):
+            self._chip_cols = (lerp_color(f0, fill, p), lerp_color(b0, border, p))
+            self.ws_status_chip.configure(fg_color=self._chip_cols[0], border_color=self._chip_cols[1])
+        self.anim.run("chip", 220, _step)
 
     def insert_token(self, token):
         self.ws_trans_box.insert(tk.INSERT, token)
@@ -3240,59 +3665,49 @@ class ModernTranslatorApp(ctk.CTk):
         self._debounce("autosave", 2000, self._autosave)
 
         diag = analyze_ui_fit(orig, trans)
-        if diag["is_overflow_risk"]: status_badge = t("badge_long")
-        elif trans: status_badge = t("badge_ok")
-        else: status_badge = t("badge_empty")
 
-        if self.tree.exists(self.selected_item_id):
-            values = list(self.tree.item(self.selected_item_id, "values"))
-            values[3] = _disp(trans)
-            values[4] = status_badge
-            self.tree.item(self.selected_item_id, values=values)
-            self._flash_row(self.selected_item_id)
+        if self.table.exists(self.selected_item_id):
+            kind, label = self._status_for("synced", diag["is_overflow_risk"], trans)
+            self.table.update_row(self.selected_item_id, trans, kind, label)
+            self.table.flash(self.selected_item_id)
 
         self.update_stats()
 
         self.btn_save_next.configure(fg_color="#047857", text=t("saved_flash"))
         self.after(250, lambda: self.btn_save_next.configure(fg_color=Theme.BTN["success"][0], text=t("btn_save_next")))
 
-        all_items = self.tree.get_children()
-        try:
-            curr_pos = all_items.index(self.selected_item_id)
-        except ValueError:
+        order = self.table.order
+        pos = self.table.pos(self.selected_item_id)
+        if pos is None:
             return
         tr_map = self.project.translations
-        for nxt in all_items[curr_pos + 1:]:
+        for nxt in order[pos + 1:]:
             if not tr_map.get(int(nxt)):
                 self._goto(nxt)
                 return
-        if curr_pos + 1 < len(all_items):
-            self._goto(all_items[curr_pos + 1])
+        if pos + 1 < len(order):
+            self._goto(order[pos + 1])
 
     def _goto(self, iid):
-        self.tree.selection_set(iid)
-        self.tree.focus(iid)
-        self.tree.see(iid)
+        self.table.select(iid, see=True)
         self._apply_selection()
 
     def nav_next(self):
-        all_items = self.tree.get_children()
-        if not all_items: return
-        if self.selected_item_id in all_items:
-            idx = all_items.index(self.selected_item_id)
-            if idx + 1 < len(all_items):
-                self._goto(all_items[idx + 1])
-        else:
-            self._goto(all_items[0])
+        order = self.table.order
+        if not order: return "break"
+        pos = self.table.pos(self.selected_item_id)
+        if pos is None:
+            self._goto(order[0])
+        elif pos + 1 < len(order):
+            self._goto(order[pos + 1])
         return "break"
 
     def nav_prev(self):
-        all_items = self.tree.get_children()
-        if not all_items: return
-        if self.selected_item_id in all_items:
-            idx = all_items.index(self.selected_item_id)
-            if idx - 1 >= 0:
-                self._goto(all_items[idx - 1])
+        order = self.table.order
+        if not order: return "break"
+        pos = self.table.pos(self.selected_item_id)
+        if pos is not None and pos > 0:
+            self._goto(order[pos - 1])
         return "break"
 
     def _autosave(self):
@@ -3365,20 +3780,16 @@ class ModernTranslatorApp(ctk.CTk):
     def focus_editor(self):
         self.ws_trans_box.focus()
 
-    def on_tree_right_click(self, event):
-        item = self.tree.identify_row(event.y)
-        if item:
-            self.tree.selection_set(item)
-            self._apply_selection()
-
-            menu = tk.Menu(self, tearoff=0, bg="#1e222b", fg=Theme.TEXT, activebackground=Theme.ACCENT)
-            menu.add_command(label=t("menu_edit"), command=self.focus_editor)
-            menu.add_command(label=t("menu_translate"), command=self.translate_active_row)
-            menu.add_command(label=t("menu_concise"), command=self.apply_concise_suggestion)
-            menu.add_separator()
-            menu.add_command(label=t("menu_copy_orig"), command=lambda: self.clipboard_clear() or self.clipboard_append(self.ws_orig_box.get("1.0", tk.END).strip()))
-            menu.add_command(label=t("menu_clear"), command=self.clear_active_translation)
-            menu.tk_popup(event.x_root, event.y_root)
+    def on_table_context(self, iid, x_root, y_root):
+        self._apply_selection()
+        menu = tk.Menu(self, tearoff=0, bg="#1e222b", fg=Theme.TEXT, activebackground=Theme.ACCENT)
+        menu.add_command(label=t("menu_edit"), command=self.focus_editor)
+        menu.add_command(label=t("menu_translate"), command=self.translate_active_row)
+        menu.add_command(label=t("menu_concise"), command=self.apply_concise_suggestion)
+        menu.add_separator()
+        menu.add_command(label=t("menu_copy_orig"), command=lambda: self.clipboard_clear() or self.clipboard_append(self.ws_orig_box.get("1.0", tk.END).strip()))
+        menu.add_command(label=t("menu_clear"), command=self.clear_active_translation)
+        menu.tk_popup(x_root, y_root)
 
     def get_selected_lang_code(self):
         val = self.lang_var.get()
@@ -3453,6 +3864,15 @@ class ModernTranslatorApp(ctk.CTk):
         self.top_progress_pct.configure(text="0%")
         self.btn_top_cancel.configure(state="normal")
         self.top_progress_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=16, pady=12)
+        self._ap_active = True
+        self._pulse_progress()
+
+    def _pulse_progress(self):
+        if not self._ap_active:
+            return
+        k = (math.sin(time.perf_counter() * 3.2) + 1) / 2
+        self.top_progress_frame.configure(border_color=lerp_color(Theme.ACCENT_HOVER, Theme.ACCENT_LIGHT, k))
+        self._jobs["pulse"] = self.after(70, self._pulse_progress)
 
     def _hide_top_progress(self):
         self.top_progress_frame.pack_forget()
@@ -3470,6 +3890,7 @@ class ModernTranslatorApp(ctk.CTk):
         self.anim.run("autobar", 320, _step)
 
     def _autotr_done(self, project, cnt):
+        self._ap_active = False
         self.btn_translate.configure(state="normal")
         self.top_progress_lbl.configure(text=t("autotr_done_lbl", count=cnt))
         self.top_progress_pct.configure(text="100%")

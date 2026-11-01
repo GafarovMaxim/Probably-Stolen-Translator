@@ -71,13 +71,11 @@ G:\Modding\ProbablyTranslator\
 - Обычный `DragAcceptFiles` на главный `root_hwnd` **НЕ РАБОТАЕТ** (при наведении мыши появляется знак 🚫).
 - **Инвариант:** Перехват обязан рекурсивно регистрировать `DragAcceptFiles(hwnd, True)` и подменять `WNDPROC` через `EnumChildWindows(root_hwnd)`.
 
-### 2. Стилизация Treeview в Dark Theme (`clam`):
-- Стандартный Tkinter `ttk.Treeview` в темной теме рисует некрасивую белую рамку в 1px.
-- **Инвариант:** Белая рамка удаляется переопределением макета стиля:
-  ```python
-  self.style.layout("Crowdin.Treeview", [('Treeview.treearea', {'sticky': 'nswe'})])
-  ```
-- Не назначать ядовитые `foreground` на теги строк таблицы (`even` / `odd`), иначе весь текст строки окрашивается в чужой цвет. Цвета статусов отображаются в отдельной колонке `#4 (Status)`.
+### 2. Таблица строк (`StringTable`):
+- С v2.8.0 таблица — виртуализированный canvas-виджет, а не `ttk.Treeview` (рисуются только видимые строки; статусы — настоящие скруглённые тэги `STATUS_STYLES`).
+- API: `set_rows(rows, reset, animate)`, `select(iid)`, `update_row(...)`, `flash(iid)`, `order`/`pos(iid)`, `selected`. Строки идентифицируются `iid = str(index)`.
+- Скроллбары везде — `SlimScrollbar` (без стрелок, thumb растёт при наведении).
+- Стили `Crowdin.Treeview*` в `_init_ttk_styles` оставлены только для совместимости и не используются.
 
 ### 3. Интернационализация (i18n):
 - Язык UI поддерживается через словарь `I18N = {"ru": {...}, "en": {...}}` и функцию `t(key, **kwargs)`.
