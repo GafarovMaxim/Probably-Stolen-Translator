@@ -41,7 +41,7 @@ from tkinter import ttk, filedialog
 from tkinter import font as tkfont
 import customtkinter as ctk
 
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.6.0"
 
 # Appearance theme
 ctk.set_appearance_mode("Dark")
@@ -172,14 +172,14 @@ CURRENT_UI_LANG = "ru"
 I18N = {
     "ru": {
         "app_title": "ProbablyTranslator - Студия локализации модов для Probably Stolen",
-        "btn_mods": "📚 Моды ({count})",
-        "btn_browse": "📁 Обзор...",
-        "btn_auto_translate": "✨ Автоперевод",
-        "btn_build": "📦 Собрать",
-        "btn_install": "🚀 В игру (Mods/)",
-        "target_lang_label": "🎯 Целевой язык:",
+        "btn_mods": "Моды ({count})",
+        "btn_browse": "Обзор...",
+        "btn_auto_translate": "Автоперевод",
+        "btn_build": "Собрать",
+        "btn_install": "В игру (Mods/)",
+        "target_lang_label": "Целевой язык:",
         "ui_lang_label": "Язык UI:",
-        "engine_label": "🌐 {engine}",
+        "engine_label": "{engine}",
         "engine_settings_title": "Настройки движков перевода",
         "mod_lib_title": "БИБЛИОТЕКА МОДОВ",
         "search_mods_placeholder": "Поиск модов...",
@@ -187,10 +187,10 @@ I18N = {
         "filter_workshop": "Workshop",
         "filter_mods": "Mods/",
         "filter_untrans": "Не переведено",
-        "filter_overflow": "⚠️ Превышение длины",
-        "filter_diff": "⚡ Обновления (Diff)",
-        "btn_new_to_top": "🔼 Новые наверх",
-        "search_strings_placeholder": "🔍 Поиск по строкам оригинала или перевода...",
+        "filter_overflow": "Превышение длины",
+        "filter_diff": "Обновления (Diff)",
+        "btn_new_to_top": "↑ Новые наверх",
+        "search_strings_placeholder": "Поиск по строкам оригинала или перевода...",
         "col_num": "#",
         "col_type": "Тип",
         "col_original": "Исходный текст (Оригинал)",
@@ -199,26 +199,26 @@ I18N = {
         "context_title": "КОНТЕКСТ И ПЕРЕВОД",
         "orig_box_title": "ОРИГИНАЛ",
         "trans_box_title": "ВАШ ПЕРЕВОД",
-        "suggestions_title": "💡 ВАРИАНТЫ ПЕРЕВОДА",
-        "btn_ai_request": "✨ Запросить у {engine}",
+        "suggestions_title": "ВАРИАНТЫ ПЕРЕВОДА",
+        "btn_ai_request": "Запросить у {engine}",
         "char_count": "{lang} {count} симв.",
         "btn_save_next": "✓ Сохранить и далее (Ctrl+Enter)",
-        "btn_translate_row": "✨ Перевести",
-        "btn_copy_orig": "🔁 Оригинал",
-        "btn_clear_row": "🧹 Очистить",
-        "btn_concise": "✂ Сократить",
-        "btn_concise_action": "✂ Сократить перевод",
+        "btn_translate_row": "Перевести",
+        "btn_copy_orig": "Оригинал",
+        "btn_clear_row": "Очистить",
+        "btn_concise": "Сократить",
+        "btn_concise_action": "Сократить перевод",
         "nav_prev": "◀ Пред.",
         "nav_next": "След. ▶",
         "status_ready": "Готов к работе. Переведено: {trans}/{total} ({pct}%)",
         "status_scanning": "Сканирование мода: {name}...",
         "status_translating": "Выполняется перевод...",
-        "overflow_warning": "⚠️ Текст в {ratio:.1f}x длиннее оригинала (+{pct}%)! Риск вылезания за кнопку.",
-        "badge_new": "⚡ НОВАЯ",
-        "badge_changed": "✏️ ИЗМЕНЕНА",
+        "overflow_warning": "Текст в {ratio:.1f}x длиннее оригинала (+{pct}%)! Риск вылезания за кнопку.",
+        "badge_new": "● НОВАЯ",
+        "badge_changed": "● ИЗМЕНЕНА",
         "badge_ok": "✓ Готово",
-        "badge_empty": "⏳ Пусто",
-        "badge_long": "⚠️ ДЛИННАЯ",
+        "badge_empty": "○ Пусто",
+        "badge_long": "▲ ДЛИННАЯ",
         "tooltip_mods": "Открыть или скрыть панель библиотеки установленных модов",
         "tooltip_browse": "Выбрать любую папку с модом вручную на диске",
         "tooltip_auto_trans": "Автоматически перевести все непереведенные строки",
@@ -233,19 +233,19 @@ I18N = {
         "tooltip_next": "Следующая строка (Alt+Down)",
         "tooltip_new_top": "Переместить новые и измененные строки в начало таблицы",
         "up_to_date": "✓ Актуален",
-        "update_badge": "🔄 Обновлен v{ver}",
+        "update_badge": "Обновлен v{ver}",
         "installed_badge": "Установлен перевод",
-        "diff_banner": "⚡ В обновлении мода обнаружено новых строк: {new_count}, изменено: {mod_count}.",
+        "diff_banner": "В обновлении мода обнаружено новых строк: {new_count}, изменено: {mod_count}.",
         "meta_file_prefix": "Метод / Файл:",
         "sec_glossary": "ИГРОВОЙ ГЛОССАРИЙ & КОНТЕКСТ",
         "sec_machine_ai": "МАШИННЫЙ & AI ПЕРЕВОД",
         "no_suggestions": "Нет доступных вариантов",
-        "src_neural": "✨ Нейросеть ({model})",
-        "src_current": "⚡ Текущий перевод",
-        "src_draft": "⚡ Быстрый черновик",
-        "src_glossary": "📖 Игровой глоссарий",
-        "src_concise": "✂️ Компактный (Интерфейс)",
-        "src_orig": "📄 Оригинал (Сброс)",
+        "src_neural": "Нейросеть ({model})",
+        "src_current": "Текущий перевод",
+        "src_draft": "Быстрый черновик",
+        "src_glossary": "Игровой глоссарий",
+        "src_concise": "Компактный (Интерфейс)",
+        "src_orig": "Оригинал (Сброс)",
         "stats_summary": "Строк: {total} | Переведено: {done} ({pct}%)",
         "badge_installed": "✓ Установлен",
         "tooltip_refresh_mods": "Обновить список модов",
@@ -263,16 +263,16 @@ I18N = {
         "toast_new_top": "Новые строки из обновления перемещены в начало!",
         "toast_concise_applied": "Применен краткий вариант для интерфейса",
         "saved_flash": "✓ Сохранено!",
-        "requesting": "⏳ Запрос...",
+        "requesting": "Запрос...",
         "toast_translated_by": "✓ Перевод получен от {engine}",
         "menu_edit": "Редактировать (F2)",
         "menu_translate": "Перевести строку",
-        "menu_concise": "✂ Сократить перевод",
+        "menu_concise": "Сократить перевод",
         "menu_copy_orig": "Копировать оригинал",
         "menu_clear": "Очистить перевод",
         "warn_pick_mod": "Сначала выберите мод из библиотеки!",
         "warn_all_translated": "Все строки уже переведены!",
-        "autotr_progress": "✨ {engine}: {done}/{total} ({pct}%)",
+        "autotr_progress": "{engine}: {done}/{total} ({pct}%)",
         "autotr_stopping": "Остановка автоперевода...",
         "autotr_done_lbl": "✓ Завершено: {count} строк!",
         "autotr_done_toast": "Автоперевод завершен! Переведено {count} строк.",
@@ -298,9 +298,9 @@ I18N = {
         "lbl_custom": "Custom API: URL / ключ / модель:",
         "lbl_models_found": "Найдено моделей: {count}",
         "lbl_models_loading": "Поиск моделей...",
-        "logs_info": "📁 Папка LLMLogs: {count} сессий ({size})",
-        "btn_clear_logs": "🧹 Очистить логи LLM",
-        "btn_open_logs": "📂 Открыть папку",
+        "logs_info": "Папка LLMLogs: {count} сессий ({size})",
+        "btn_clear_logs": "Очистить логи LLM",
+        "btn_open_logs": "Открыть папку",
         "btn_save_settings": "Сохранить настройки",
         "toast_settings_saved": "Настройки движка сохранены!",
         "toast_logs_cleared": "Удалено {count} файлов логов LLM",
@@ -310,14 +310,14 @@ I18N = {
     },
     "en": {
         "app_title": "ProbablyTranslator - Mod Localization Studio for Probably Stolen",
-        "btn_mods": "📚 Mods ({count})",
-        "btn_browse": "📁 Browse...",
-        "btn_auto_translate": "✨ Auto-Translate",
-        "btn_build": "📦 Build",
-        "btn_install": "🚀 To Game (Mods/)",
-        "target_lang_label": "🎯 Target Language:",
+        "btn_mods": "Mods ({count})",
+        "btn_browse": "Browse...",
+        "btn_auto_translate": "Auto-Translate",
+        "btn_build": "Build",
+        "btn_install": "To Game (Mods/)",
+        "target_lang_label": "Target Language:",
         "ui_lang_label": "UI Lang:",
-        "engine_label": "🌐 {engine}",
+        "engine_label": "{engine}",
         "engine_settings_title": "Translation Engine Settings",
         "mod_lib_title": "MOD LIBRARY",
         "search_mods_placeholder": "Search mods...",
@@ -325,10 +325,10 @@ I18N = {
         "filter_workshop": "Workshop",
         "filter_mods": "Mods/",
         "filter_untrans": "Untranslated",
-        "filter_overflow": "⚠️ UI Overflow",
-        "filter_diff": "⚡ Updates (Diff)",
-        "btn_new_to_top": "🔼 New to Top",
-        "search_strings_placeholder": "🔍 Search original or translation...",
+        "filter_overflow": "UI Overflow",
+        "filter_diff": "Updates (Diff)",
+        "btn_new_to_top": "↑ New to Top",
+        "search_strings_placeholder": "Search original or translation...",
         "col_num": "#",
         "col_type": "Type",
         "col_original": "Original Text",
@@ -337,26 +337,26 @@ I18N = {
         "context_title": "CONTEXT & TRANSLATION",
         "orig_box_title": "ORIGINAL",
         "trans_box_title": "YOUR TRANSLATION",
-        "suggestions_title": "💡 TRANSLATION VARIANTS",
-        "btn_ai_request": "✨ Request from {engine}",
+        "suggestions_title": "TRANSLATION VARIANTS",
+        "btn_ai_request": "Request from {engine}",
         "char_count": "{lang} {count} chars",
         "btn_save_next": "✓ Save & Next (Ctrl+Enter)",
-        "btn_translate_row": "✨ Translate",
-        "btn_copy_orig": "🔁 Original",
-        "btn_clear_row": "🧹 Clear",
-        "btn_concise": "✂ Concise",
-        "btn_concise_action": "✂ Make Concise",
+        "btn_translate_row": "Translate",
+        "btn_copy_orig": "Original",
+        "btn_clear_row": "Clear",
+        "btn_concise": "Concise",
+        "btn_concise_action": "Make Concise",
         "nav_prev": "◀ Prev",
         "nav_next": "Next ▶",
         "status_ready": "Ready. Translated: {trans}/{total} ({pct}%)",
         "status_scanning": "Scanning mod: {name}...",
         "status_translating": "Translating...",
-        "overflow_warning": "⚠️ Text is {ratio:.1f}x longer than original (+{pct}%)! UI clipping risk.",
-        "badge_new": "⚡ NEW",
-        "badge_changed": " ✏️ MODIFIED ",
+        "overflow_warning": "Text is {ratio:.1f}x longer than original (+{pct}%)! UI clipping risk.",
+        "badge_new": "● NEW",
+        "badge_changed": "● MODIFIED",
         "badge_ok": "✓ Done",
-        "badge_empty": "⏳ Empty",
-        "badge_long": "⚠️ LONG",
+        "badge_empty": "○ Empty",
+        "badge_long": "▲ LONG",
         "tooltip_mods": "Toggle installed mod library drawer",
         "tooltip_browse": "Browse any mod folder manually on disk",
         "tooltip_auto_trans": "Auto-translate all untranslated strings",
@@ -371,19 +371,19 @@ I18N = {
         "tooltip_next": "Next string (Alt+Down)",
         "tooltip_new_top": "Move new and modified update strings to the top",
         "up_to_date": "✓ Up to date",
-        "update_badge": "🔄 Updated v{ver}",
+        "update_badge": "Updated v{ver}",
         "installed_badge": "Translation Installed",
-        "diff_banner": "⚡ Mod update detected: {new_count} new strings, {mod_count} modified.",
+        "diff_banner": "Mod update detected: {new_count} new strings, {mod_count} modified.",
         "meta_file_prefix": "Method / File:",
         "sec_glossary": "GAMING GLOSSARY & CONTEXT",
         "sec_machine_ai": "MACHINE & AI TRANSLATION",
         "no_suggestions": "No suggestions available",
-        "src_neural": "✨ Neural Model ({model})",
-        "src_current": "⚡ Current Translation",
-        "src_draft": "⚡ Quick Draft",
-        "src_glossary": "📖 Gaming Glossary",
-        "src_concise": "✂️ Compact (UI)",
-        "src_orig": "📄 Original (Reset)",
+        "src_neural": "Neural Model ({model})",
+        "src_current": "Current Translation",
+        "src_draft": "Quick Draft",
+        "src_glossary": "Gaming Glossary",
+        "src_concise": "Compact (UI)",
+        "src_orig": "Original (Reset)",
         "stats_summary": "Strings: {total} | Translated: {done} ({pct}%)",
         "badge_installed": "✓ Installed",
         "tooltip_refresh_mods": "Refresh mod library",
@@ -401,16 +401,16 @@ I18N = {
         "toast_new_top": "New strings from the update moved to the top!",
         "toast_concise_applied": "Compact UI variant applied",
         "saved_flash": "✓ Saved!",
-        "requesting": "⏳ Requesting...",
+        "requesting": "Requesting...",
         "toast_translated_by": "✓ Translation received from {engine}",
         "menu_edit": "Edit (F2)",
         "menu_translate": "Translate string",
-        "menu_concise": "✂ Make concise",
+        "menu_concise": "Make concise",
         "menu_copy_orig": "Copy original",
         "menu_clear": "Clear translation",
         "warn_pick_mod": "Pick a mod from the library first!",
         "warn_all_translated": "All strings are already translated!",
-        "autotr_progress": "✨ {engine}: {done}/{total} ({pct}%)",
+        "autotr_progress": "{engine}: {done}/{total} ({pct}%)",
         "autotr_stopping": "Stopping auto-translate...",
         "autotr_done_lbl": "✓ Done: {count} strings!",
         "autotr_done_toast": "Auto-translate finished! Translated {count} strings.",
@@ -436,9 +436,9 @@ I18N = {
         "lbl_custom": "Custom API: URL / key / model:",
         "lbl_models_found": "Models found: {count}",
         "lbl_models_loading": "Looking for models...",
-        "logs_info": "📁 LLMLogs folder: {count} sessions ({size})",
-        "btn_clear_logs": "🧹 Clear LLM logs",
-        "btn_open_logs": "📂 Open folder",
+        "logs_info": "LLMLogs folder: {count} sessions ({size})",
+        "btn_clear_logs": "Clear LLM logs",
+        "btn_open_logs": "Open folder",
         "btn_save_settings": "Save settings",
         "toast_settings_saved": "Engine settings saved!",
         "toast_logs_cleared": "Deleted {count} LLM log files",
@@ -1062,7 +1062,7 @@ def generate_crowdin_suggestions(orig: str, current_trans: str, target_lang="ru"
             "source": t("src_orig"),
             "text": orig_clean,
             "badge_color": "#94a3b8",
-            "border_color": "#475569"
+            "border_color": "#3a4358"
         })
 
     return suggestions[:3]
@@ -1602,34 +1602,39 @@ class ModProject:
 # -------------------------------------------------------------
 
 class Theme:
-    """Design tokens shared by every widget (single source of truth for colors)."""
-    BG = "#090d16"
-    PANEL = "#0f172a"
-    CENTER = "#0b1120"
-    BAR = "#111827"
-    CARD = "#182234"
-    CARD_HOVER = "#1e2b42"
-    CARD_ACTIVE = "#10304d"
-    BORDER = "#223048"
-    FIELD = "#1e293b"
-    TEXT = "#f8fafc"
-    TEXT_SOFT = "#e2e8f0"
-    MUTED = "#94a3b8"
-    DIM = "#64748b"
-    ACCENT = "#0284c7"
-    ACCENT_LIGHT = "#38bdf8"
-    OK = "#10b981"
-    WARN = "#f59e0b"
-    ERR = "#ef4444"
+    """Design tokens shared by every widget (single source of truth for colors). Graphite + indigo."""
+    BG = "#0a0c11"
+    PANEL = "#10131a"
+    CENTER = "#0c0f15"
+    BAR = "#12151d"
+    CARD = "#161a23"
+    CARD_HOVER = "#1c212d"
+    CARD_ACTIVE = "#1a2144"
+    BORDER = "#232936"
+    FIELD = "#1a1f2a"
+    LINE = "#2b3242"
+    SELECT = "#252c5e"
+    HEAD = "#0e1118"
+    ROW_ODD = "#12161e"
+    TEXT = "#eef1f7"
+    TEXT_SOFT = "#d7dbe6"
+    MUTED = "#98a1b5"
+    DIM = "#667086"
+    ACCENT = "#6366f1"
+    ACCENT_HOVER = "#4f46e5"
+    ACCENT_LIGHT = "#a5b4fc"
+    OK = "#34d399"
+    WARN = "#fbbf24"
+    ERR = "#f87171"
     # (fill, hover)
     BTN = {
-        "ghost": ("#1e293b", "#334155"),
-        "muted": ("#334155", "#475569"),
-        "primary": ("#2563eb", "#1d4ed8"),
-        "success": ("#16a34a", "#15803d"),
-        "info": ("#0891b2", "#0e7490"),
-        "warn": ("#d97706", "#b45309"),
-        "danger": ("#dc2626", "#b91c1c"),
+        "ghost": ("#1a1f2a", "#252b3a"),
+        "muted": ("#262c3a", "#323a4d"),
+        "primary": ("#6366f1", "#4f46e5"),
+        "success": ("#059669", "#047857"),
+        "info": ("#262c3a", "#323a4d"),
+        "warn": ("#b45309", "#92400e"),
+        "danger": ("#b91c1c", "#991b1b"),
     }
     # (fill, border, text) - pill palette from AGENTS.md invariants
     PILLS = {
@@ -1791,7 +1796,7 @@ class ModLibraryView(tk.Frame):
             self._pill(px, py, "CSV" if m["has_csv"] else "DLL", "csv" if m["has_csv"] else "dll")
 
             if m.get("has_update"):
-                self._pill(x2 - self.s(10), py, f"🔄 Update v{m['version']}", "update", anchor="e")
+                self._pill(x2 - self.s(10), py, f"Update v{m['version']}", "update", anchor="e")
             elif m.get("matched_installed") or m["source"] == "Game Mods":
                 self._pill(x2 - self.s(10), py, t("badge_installed"), "installed", anchor="e")
 
@@ -1944,10 +1949,11 @@ class ModernTranslatorApp(ctk.CTk):
             "empty_s": tkfont.Font(family=ff, size=-int(13 * self.k)),
         }
 
-    def _mk_btn(self, parent, text, command, kind="ghost", width=None, height=34, font="btn", **kw):
+    def _mk_btn(self, parent, text, command, kind="ghost", width=None, height=36, font="btn", pill=False, **kw):
         fg, hover = Theme.BTN[kind]
+        pill_r = height // 2
         opts = dict(text=text, height=height, font=self.F[font], fg_color=fg, hover_color=hover,
-                    corner_radius=8, cursor="hand2", command=command)
+                    corner_radius=pill_r if pill else 10, cursor="hand2", command=command)
         if width:
             opts["width"] = width
         opts.update(kw)
@@ -1974,7 +1980,7 @@ class ModernTranslatorApp(ctk.CTk):
             self.busy_bar.pack_forget()
 
     def toast_show(self, msg, level="info", duration_ms=2500):
-        prefix = {"success": "✓ ", "warning": "⚠️ ", "error": "❌ "}.get(level, "ℹ️ ")
+        prefix = {"success": "✓  ", "warning": "!  ", "error": "×  "}.get(level, "·  ")
         color = {"success": Theme.OK, "warning": Theme.WARN, "error": Theme.ERR}.get(level, Theme.ACCENT_LIGHT)
         self.status_lbl.configure(text=prefix + msg, text_color=color)
         if self._toast_job:
@@ -2002,7 +2008,7 @@ class ModernTranslatorApp(ctk.CTk):
             "Crowdin.Treeview",
             background=Theme.PANEL,
             foreground=Theme.TEXT,
-            rowheight=int(34 * self.k),
+            rowheight=int(38 * self.k),
             fieldbackground=Theme.PANEL,
             font=("Segoe UI", 10),
             borderwidth=0,
@@ -2014,25 +2020,25 @@ class ModernTranslatorApp(ctk.CTk):
         )
         self.style.map(
             "Crowdin.Treeview",
-            background=[("selected", "#1a365d")],
+            background=[("selected", Theme.SELECT)],
             foreground=[("selected", "#ffffff")]
         )
         self.style.configure(
             "Crowdin.Treeview.Heading",
-            background="#131b2c",
+            background=Theme.HEAD,
             foreground=Theme.MUTED,
             font=("Segoe UI", 10, "bold"),
             relief="flat",
             borderwidth=0,
-            bordercolor="#131b2c",
-            padding=(8, 8)
+            bordercolor=Theme.HEAD,
+            padding=(10, 10)
         )
         self.style.map("Crowdin.Treeview.Heading", background=[("active", Theme.FIELD)])
 
         self.style.configure(
             "Crowdin.Vertical.TScrollbar",
             gripcount=0,
-            background="#334155",
+            background=Theme.LINE,
             troughcolor=Theme.PANEL,
             bordercolor=Theme.PANEL,
             arrowcolor=Theme.MUTED,
@@ -2042,7 +2048,7 @@ class ModernTranslatorApp(ctk.CTk):
         )
         self.style.map(
             "Crowdin.Vertical.TScrollbar",
-            background=[("active", "#475569"), ("pressed", Theme.ACCENT)],
+            background=[("active", "#3a4358"), ("pressed", Theme.ACCENT)],
             arrowcolor=[("active", "#ffffff")]
         )
 
@@ -2051,7 +2057,7 @@ class ModernTranslatorApp(ctk.CTk):
     # -------------------------------------------------------------
 
     def _build_top_bar(self):
-        self.top_bar = ctk.CTkFrame(self, fg_color=Theme.BAR, height=58, corner_radius=0)
+        self.top_bar = ctk.CTkFrame(self, fg_color=Theme.BAR, height=62, corner_radius=0)
         self.top_bar.pack(side=tk.TOP, fill=tk.X)
         self.top_bar.pack_propagate(False)
 
@@ -2063,7 +2069,7 @@ class ModernTranslatorApp(ctk.CTk):
         self.btn_install.pack(side=tk.RIGHT, padx=(6, 0))
         CTooltip(self.btn_install, lambda: t("tooltip_install"))
 
-        self.btn_build = self._mk_btn(right_grp, t("btn_build"), self.do_build, "info", width=95)
+        self.btn_build = self._mk_btn(right_grp, t("btn_build"), self.do_build, "muted", width=95)
         self.btn_build.pack(side=tk.RIGHT, padx=4)
         CTooltip(self.btn_build, lambda: t("tooltip_build"))
 
@@ -2071,7 +2077,7 @@ class ModernTranslatorApp(ctk.CTk):
         self.btn_translate.pack(side=tk.RIGHT, padx=4)
         CTooltip(self.btn_translate, lambda: t("tooltip_auto_trans"))
 
-        self.btn_engine = self._mk_btn(right_grp, f"🌐 {self.translation_engine.upper()}", self.open_engine_settings,
+        self.btn_engine = self._mk_btn(right_grp, self.translation_engine.upper(), self.open_engine_settings,
                                        "ghost", width=100, font="small")
         self.btn_engine.pack(side=tk.RIGHT, padx=6)
         CTooltip(self.btn_engine, lambda: t("tooltip_engine"))
@@ -2087,7 +2093,7 @@ class ModernTranslatorApp(ctk.CTk):
         self.lang_var = ctk.StringVar(value=initial)
         self.lang_menu = ctk.CTkOptionMenu(
             lang_frame, variable=self.lang_var, values=[f"{name} [{code}]" for name, code in LANGUAGES],
-            width=135, height=34, font=self.F["small"], fg_color=Theme.FIELD, button_color="#334155",
+            width=135, height=34, font=self.F["small"], fg_color=Theme.FIELD, button_color=Theme.LINE,
             command=self.on_lang_changed
         )
         self.lang_menu.pack(side=tk.LEFT)
@@ -2097,15 +2103,15 @@ class ModernTranslatorApp(ctk.CTk):
         ui_lang_frame.pack(side=tk.RIGHT, padx=(0, 8))
 
         self.btn_ui_ru = ctk.CTkButton(
-            ui_lang_frame, text="🇷🇺 RU", width=52, height=30, font=self.F["tiny_b"], corner_radius=6,
-            fg_color=Theme.ACCENT if CURRENT_UI_LANG == "ru" else "transparent", hover_color="#0369a1",
+            ui_lang_frame, text="RU", width=52, height=30, font=self.F["tiny_b"], corner_radius=6,
+            fg_color=Theme.ACCENT if CURRENT_UI_LANG == "ru" else "transparent", hover_color=Theme.ACCENT_HOVER,
             cursor="hand2", command=lambda: self.switch_ui_lang("ru")
         )
         self.btn_ui_ru.pack(side=tk.LEFT, padx=2, pady=2)
 
         self.btn_ui_en = ctk.CTkButton(
-            ui_lang_frame, text="🇬🇧 EN", width=52, height=30, font=self.F["tiny_b"], corner_radius=6,
-            fg_color=Theme.ACCENT if CURRENT_UI_LANG == "en" else "transparent", hover_color="#0369a1",
+            ui_lang_frame, text="EN", width=52, height=30, font=self.F["tiny_b"], corner_radius=6,
+            fg_color=Theme.ACCENT if CURRENT_UI_LANG == "en" else "transparent", hover_color=Theme.ACCENT_HOVER,
             cursor="hand2", command=lambda: self.switch_ui_lang("en")
         )
         self.btn_ui_en.pack(side=tk.LEFT, padx=2, pady=2)
@@ -2216,13 +2222,13 @@ class ModernTranslatorApp(ctk.CTk):
         self.lbl_lib_title = ctk.CTkLabel(hdr, text=t("mod_lib_title"), font=self.F["small_b"], text_color=Theme.MUTED)
         self.lbl_lib_title.pack(side=tk.LEFT)
 
-        btn_refresh = self._mk_btn(hdr, "🔄", self.refresh_mod_library, "ghost", width=30, height=28, font="reg")
+        btn_refresh = self._mk_btn(hdr, "↻", self.refresh_mod_library, "ghost", width=30, height=28, font="reg")
         btn_refresh.pack(side=tk.RIGHT)
         CTooltip(btn_refresh, lambda: t("tooltip_refresh_mods"))
 
         self.lib_search_entry = ctk.CTkEntry(
             self.lib_frame, placeholder_text=t("search_mods_placeholder"), height=32, font=self.F["small"],
-            fg_color=Theme.FIELD, border_color="#334155"
+            fg_color=Theme.FIELD, border_color=Theme.LINE
         )
         self.lib_search_entry.pack(fill=tk.X, padx=12, pady=4)
         self.lib_search_entry.bind("<KeyRelease>", lambda e: self._debounce("lsearch", 120, self.render_library))
@@ -2230,12 +2236,12 @@ class ModernTranslatorApp(ctk.CTk):
         cat_bar = ctk.CTkFrame(self.lib_frame, fg_color="transparent")
         cat_bar.pack(fill=tk.X, padx=12, pady=4)
 
-        self.btn_cat_all = self._mk_btn(cat_bar, t("filter_all"), lambda: self.set_lib_filter("all"), "primary", width=56, height=26, font="tiny")
+        self.btn_cat_all = self._mk_btn(cat_bar, t("filter_all"), lambda: self.set_lib_filter("all"), "primary", width=56, height=26, font="tiny", pill=True)
         self.btn_cat_all.configure(fg_color=Theme.ACCENT)
         self.btn_cat_all.pack(side=tk.LEFT, padx=1)
-        self.btn_cat_ws = self._mk_btn(cat_bar, t("filter_workshop"), lambda: self.set_lib_filter("workshop"), "ghost", width=76, height=26, font="tiny")
+        self.btn_cat_ws = self._mk_btn(cat_bar, t("filter_workshop"), lambda: self.set_lib_filter("workshop"), "ghost", width=76, height=26, font="tiny", pill=True)
         self.btn_cat_ws.pack(side=tk.LEFT, padx=1)
-        self.btn_cat_mods = self._mk_btn(cat_bar, t("filter_mods"), lambda: self.set_lib_filter("mods"), "ghost", width=56, height=26, font="tiny")
+        self.btn_cat_mods = self._mk_btn(cat_bar, t("filter_mods"), lambda: self.set_lib_filter("mods"), "ghost", width=56, height=26, font="tiny", pill=True)
         self.btn_cat_mods.pack(side=tk.LEFT, padx=1)
 
         self.lib_view = ModLibraryView(self.lib_frame, on_open=self.load_mod, scale=self.k)
@@ -2255,7 +2261,7 @@ class ModernTranslatorApp(ctk.CTk):
 
         self.search_entry = ctk.CTkEntry(
             row1, placeholder_text=t("search_strings_placeholder"), height=32, font=self.F["small"],
-            fg_color=Theme.FIELD, border_color="#334155"
+            fg_color=Theme.FIELD, border_color=Theme.LINE
         )
         self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.search_entry.bind("<KeyRelease>", lambda e: self._debounce("tsearch", 180, self.apply_filter))
@@ -2263,14 +2269,14 @@ class ModernTranslatorApp(ctk.CTk):
         row2 = ctk.CTkFrame(filter_bar, fg_color="transparent")
         row2.pack(fill=tk.X, padx=12, pady=(0, 10))
 
-        self.btn_filter_all = self._mk_btn(row2, t("filter_all"), lambda: self.set_table_filter("all"), "primary", width=50, height=28, font="small")
+        self.btn_filter_all = self._mk_btn(row2, t("filter_all"), lambda: self.set_table_filter("all"), "primary", width=50, height=28, font="small", pill=True)
         self.btn_filter_all.configure(fg_color=Theme.ACCENT)
         self.btn_filter_all.pack(side=tk.LEFT, padx=(0, 4))
-        self.btn_filter_untrans = self._mk_btn(row2, t("filter_untrans"), lambda: self.set_table_filter("untranslated"), "ghost", width=105, height=28, font="small")
+        self.btn_filter_untrans = self._mk_btn(row2, t("filter_untrans"), lambda: self.set_table_filter("untranslated"), "ghost", width=105, height=28, font="small", pill=True)
         self.btn_filter_untrans.pack(side=tk.LEFT, padx=2)
-        self.btn_filter_overflow = self._mk_btn(row2, t("filter_overflow"), lambda: self.set_table_filter("overflow"), "ghost", width=130, height=28, font="small")
+        self.btn_filter_overflow = self._mk_btn(row2, t("filter_overflow"), lambda: self.set_table_filter("overflow"), "ghost", width=130, height=28, font="small", pill=True)
         self.btn_filter_overflow.pack(side=tk.LEFT, padx=2)
-        self.btn_filter_diff = self._mk_btn(row2, t("filter_diff"), lambda: self.set_table_filter("diff"), "ghost", width=125, height=28, font="small")
+        self.btn_filter_diff = self._mk_btn(row2, t("filter_diff"), lambda: self.set_table_filter("diff"), "ghost", width=125, height=28, font="small", pill=True)
         self.btn_filter_diff.pack(side=tk.LEFT, padx=2)
 
         table_container = tk.Frame(self.center_frame, bg=Theme.PANEL, bd=0, highlightthickness=0, relief="flat")
@@ -2299,7 +2305,7 @@ class ModernTranslatorApp(ctk.CTk):
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.tree.tag_configure("even", background=Theme.PANEL, foreground=Theme.TEXT)
-        self.tree.tag_configure("odd", background="#131d33", foreground=Theme.TEXT)
+        self.tree.tag_configure("odd", background=Theme.ROW_ODD, foreground=Theme.TEXT)
 
         # Arrow keys already emit <<TreeviewSelect>>; the old extra <Up>/<Down> binds ran the heavy handler twice.
         self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
@@ -2333,15 +2339,16 @@ class ModernTranslatorApp(ctk.CTk):
 
         self.ws_status_chip = ctk.CTkFrame(hdr, fg_color=Theme.FIELD, corner_radius=10, border_width=1, border_color="#64748b")
         self.ws_status_chip.pack(side=tk.RIGHT)
-        self.ws_status_badge = ctk.CTkLabel(self.ws_status_chip, text=t("badge_empty"), font=self.F["tiny_b"], text_color="#cbd5e1", padx=8, pady=2)
+        self.ws_status_badge = ctk.CTkLabel(self.ws_status_chip, text=t("badge_empty"), font=self.F["tiny_b"], text_color=Theme.MUTED, padx=8, pady=2)
         self.ws_status_badge.pack()
 
         # 1. Original text card
-        orig_card = ctk.CTkFrame(ws, fg_color=Theme.CARD, corner_radius=10, border_width=1, border_color=Theme.BORDER)
+        orig_card = ctk.CTkFrame(ws, fg_color=Theme.CARD, corner_radius=12, border_width=1, border_color=Theme.BORDER)
         orig_card.pack(fill=tk.X, padx=12, pady=4)
 
         orig_top = ctk.CTkFrame(orig_card, fg_color="transparent")
         orig_top.pack(fill=tk.X, padx=10, pady=(6, 2))
+        ctk.CTkFrame(orig_top, width=4, height=12, fg_color=Theme.ACCENT_LIGHT, corner_radius=2).pack(side=tk.LEFT, padx=(0, 6))
         self.ws_orig_title = ctk.CTkLabel(orig_top, text=t("orig_box_title"), font=self.F["tiny_b"], text_color=Theme.ACCENT_LIGHT)
         self.ws_orig_title.pack(side=tk.LEFT)
         self.ws_orig_len_lbl = ctk.CTkLabel(orig_top, text=t("char_count", lang="cn", count=0), font=self.F["tiny"], text_color=Theme.MUTED)
@@ -2352,7 +2359,7 @@ class ModernTranslatorApp(ctk.CTk):
         setup_textbox_clipboard(self.ws_orig_box, is_readonly=True)
 
         # 2. UI-fit card
-        self.ws_fit_card = ctk.CTkFrame(ws, fg_color=Theme.FIELD, corner_radius=8, border_width=1, border_color="#334155")
+        self.ws_fit_card = ctk.CTkFrame(ws, fg_color=Theme.FIELD, corner_radius=8, border_width=1, border_color=Theme.LINE)
         self.ws_fit_card.pack(fill=tk.X, padx=12, pady=3)
 
         fit_inner = ctk.CTkFrame(self.ws_fit_card, fg_color="transparent")
@@ -2360,7 +2367,7 @@ class ModernTranslatorApp(ctk.CTk):
         self.ws_meta_lbl = ctk.CTkLabel(fit_inner, text=f"{t('meta_file_prefix')} -", font=self.F["tiny"], text_color=Theme.DIM)
         self.ws_meta_lbl.pack(anchor="w")
 
-        self.ws_overflow_alert = ctk.CTkFrame(self.ws_fit_card, fg_color="#451a03", corner_radius=8, border_width=1, border_color="#b45309")
+        self.ws_overflow_alert = ctk.CTkFrame(self.ws_fit_card, fg_color="#2a1e08", corner_radius=8, border_width=1, border_color="#b45309")
         self.ws_overflow_alert_lbl = ctk.CTkLabel(self.ws_overflow_alert, text="", font=self.F["small_b"], text_color="#fef3c7", justify="left", wraplength=int(230 * self.k))
         self.ws_overflow_alert_lbl.pack(side=tk.LEFT, padx=8, pady=4, fill=tk.X, expand=True)
         self.btn_concise = self._mk_btn(self.ws_overflow_alert, t("btn_concise_action"), self.apply_concise_suggestion, "warn", height=26, font="small_b")
@@ -2368,11 +2375,12 @@ class ModernTranslatorApp(ctk.CTk):
         self._alert_visible = False
 
         # 3. Translation editor card
-        trans_card = ctk.CTkFrame(ws, fg_color=Theme.CARD, corner_radius=10, border_width=1, border_color=Theme.BORDER)
+        trans_card = ctk.CTkFrame(ws, fg_color=Theme.CARD, corner_radius=12, border_width=1, border_color=Theme.BORDER)
         trans_card.pack(fill=tk.BOTH, expand=True, padx=12, pady=3)
 
         trans_top = ctk.CTkFrame(trans_card, fg_color="transparent")
         trans_top.pack(fill=tk.X, padx=10, pady=(6, 2))
+        ctk.CTkFrame(trans_top, width=4, height=12, fg_color=Theme.OK, corner_radius=2).pack(side=tk.LEFT, padx=(0, 6))
         self.ws_trans_title = ctk.CTkLabel(trans_top, text=t("trans_box_title"), font=self.F["tiny_b"], text_color=Theme.OK)
         self.ws_trans_title.pack(side=tk.LEFT)
         self.ws_trans_len_lbl = ctk.CTkLabel(trans_top, text=t("char_count", lang="RU", count=0), font=self.F["tiny"], text_color=Theme.MUTED)
@@ -2383,11 +2391,11 @@ class ModernTranslatorApp(ctk.CTk):
         self.chips_frame.pack(fill=tk.X, padx=8, pady=(1, 3))
         self._chip_pool = []
         for _ in range(8):
-            chip = tk.Label(self.chips_frame, text="", bg="#334155", fg=Theme.TEXT_SOFT, font=self.tkF["chip"], padx=6, pady=1, cursor="hand2")
+            chip = tk.Label(self.chips_frame, text="", bg=Theme.LINE, fg=Theme.TEXT_SOFT, font=self.tkF["chip"], padx=6, pady=1, cursor="hand2")
             chip._tok = ""
             chip.bind("<Button-1>", lambda e, c=chip: self.insert_token(c._tok))
             chip.bind("<Enter>", lambda e, c=chip: c.configure(bg=Theme.ACCENT))
-            chip.bind("<Leave>", lambda e, c=chip: c.configure(bg="#334155"))
+            chip.bind("<Leave>", lambda e, c=chip: c.configure(bg=Theme.LINE))
             CTooltip(chip, lambda c=chip: t("tooltip_insert_token", tok=c._tok))
             self._chip_pool.append(chip)
 
@@ -2404,7 +2412,7 @@ class ModernTranslatorApp(ctk.CTk):
             self.ws_trans_box.bind(f"<Control-Key-{i}>", lambda e, idx=i - 1: self.apply_suggestion_by_index(idx))
 
         # 4. Suggestions panel (pooled rows)
-        self.suggestions_frame = ctk.CTkFrame(ws, fg_color=Theme.BAR, corner_radius=10, border_width=1, border_color=Theme.BORDER)
+        self.suggestions_frame = ctk.CTkFrame(ws, fg_color=Theme.BAR, corner_radius=12, border_width=1, border_color=Theme.BORDER)
         self.suggestions_frame.pack(fill=tk.X, padx=12, pady=3)
 
         sugg_top = ctk.CTkFrame(self.suggestions_frame, fg_color="transparent")
@@ -2416,13 +2424,13 @@ class ModernTranslatorApp(ctk.CTk):
         btns_sugg.pack(side=tk.RIGHT)
 
         eng_name = self.ollama_model if self.translation_engine == "ollama" else self.translation_engine.upper()
-        self.btn_request_ai = self._mk_btn(btns_sugg, f"✨ {eng_name}", self.translate_active_row_ai, "ghost", height=24, font="tiny_b",
-                                           border_width=1, border_color="#0369a1", hover_color=Theme.ACCENT)
+        self.btn_request_ai = self._mk_btn(btns_sugg, eng_name, self.translate_active_row_ai, "ghost", height=24, font="tiny_b",
+                                           border_width=1, border_color=Theme.ACCENT_HOVER, hover_color=Theme.ACCENT)
         self.btn_request_ai.pack(side=tk.LEFT, padx=(0, 4))
         CTooltip(self.btn_request_ai, lambda: t("tooltip_ai_req", engine=self.ollama_model if self.translation_engine == "ollama" else self.translation_engine.upper()))
 
-        self.btn_request_google = self._mk_btn(btns_sugg, "🌐 Google", self.translate_active_row_google, "ghost", height=24, width=66, font="tiny_b",
-                                               border_width=1, border_color="#334155", hover_color=Theme.ACCENT)
+        self.btn_request_google = self._mk_btn(btns_sugg, "Google", self.translate_active_row_google, "ghost", height=24, width=66, font="tiny_b",
+                                               border_width=1, border_color=Theme.LINE, hover_color=Theme.ACCENT)
         self.btn_request_google.pack(side=tk.LEFT)
         CTooltip(self.btn_request_google, lambda: t("tooltip_google_req"))
 
@@ -2482,7 +2490,7 @@ class ModernTranslatorApp(ctk.CTk):
         self.top_progress_bar = ctk.CTkProgressBar(self.top_progress_frame, width=150, height=8, fg_color=Theme.PANEL, progress_color=Theme.OK)
         self.top_progress_bar.pack(side=tk.LEFT, padx=4)
         self.top_progress_bar.set(0)
-        self.btn_top_cancel = self._mk_btn(self.top_progress_frame, "⏹", self.cancel_auto_translate, "danger", width=28, height=20, font="tiny_b")
+        self.btn_top_cancel = self._mk_btn(self.top_progress_frame, "■", self.cancel_auto_translate, "danger", width=28, height=20, font="tiny_b")
         self.btn_top_cancel.pack(side=tk.LEFT, padx=(6, 6), pady=2)
         CTooltip(self.btn_top_cancel, lambda: t("tooltip_stop_autotr"))
 
@@ -2608,7 +2616,7 @@ class ModernTranslatorApp(ctk.CTk):
 
         meta = project.manifest
         fmt = "CSV" if project.is_csv_mod else "DLL"
-        self.mod_badge.configure(text=f"📦 {meta['name']} • {meta['author']} [{fmt}]")
+        self.mod_badge.configure(text=f"{meta['name']} • {meta['author']} [{fmt}]")
 
         self.render_library()
         self._update_empty_state()
@@ -2908,8 +2916,8 @@ class ModernTranslatorApp(ctk.CTk):
         hdr_i = 0
         row_i = 0
         self.active_suggestions = []
-        for title, group, icon, color in ((t("sec_glossary"), tm_items, "📖", Theme.ACCENT_LIGHT),
-                                          (t("sec_machine_ai"), mt_items, "🤖", "#a855f7")):
+        for title, group, icon, color in ((t("sec_glossary"), tm_items, "◆", Theme.ACCENT_LIGHT),
+                                          (t("sec_machine_ai"), mt_items, "◆", "#c084fc")):
             if not group or hdr_i >= len(self._sugg_headers):
                 continue
             hdr = self._sugg_headers[hdr_i]
@@ -2955,14 +2963,14 @@ class ModernTranslatorApp(ctk.CTk):
 
         if trans:
             if diag["is_overflow_risk"]:
-                self.ws_status_chip.configure(fg_color="#451a03", border_color=Theme.WARN)
+                self.ws_status_chip.configure(fg_color="#2a1e08", border_color=Theme.WARN)
                 self.ws_status_badge.configure(text=t("badge_long"), text_color="#fde68a")
             else:
                 self.ws_status_chip.configure(fg_color="#064e3b", border_color=Theme.OK)
                 self.ws_status_badge.configure(text=t("badge_ok"), text_color="#6ee7b7")
         else:
             self.ws_status_chip.configure(fg_color=Theme.FIELD, border_color="#64748b")
-            self.ws_status_badge.configure(text=t("badge_empty"), text_color="#cbd5e1")
+            self.ws_status_badge.configure(text=t("badge_empty"), text_color=Theme.MUTED)
 
     def insert_token(self, token):
         self.ws_trans_box.insert(tk.INSERT, token)
@@ -3009,7 +3017,7 @@ class ModernTranslatorApp(ctk.CTk):
 
         self.update_stats()
 
-        self.btn_save_next.configure(fg_color="#059669", text=t("saved_flash"))
+        self.btn_save_next.configure(fg_color="#047857", text=t("saved_flash"))
         self.after(250, lambda: self.btn_save_next.configure(fg_color=Theme.BTN["success"][0], text=t("btn_save_next")))
 
         all_items = self.tree.get_children()
@@ -3064,7 +3072,7 @@ class ModernTranslatorApp(ctk.CTk):
 
     def update_ai_btn_text(self):
         eng_name = self.ollama_model if self.translation_engine == "ollama" else self.translation_engine.upper()
-        self.btn_request_ai.configure(text=f"✨ {eng_name}")
+        self.btn_request_ai.configure(text=eng_name)
 
     def translate_active_row_ai(self):
         self._translate_active_row_custom(engine=self.translation_engine, button_ref=self.btn_request_ai)
@@ -3281,7 +3289,7 @@ class ModernTranslatorApp(ctk.CTk):
 
             threading.Thread(target=_worker, daemon=True).start()
 
-        self._mk_btn(f_ollama, "🔄", _load_models, "ghost", width=34, height=28, font="reg").pack(side=tk.LEFT, padx=3)
+        self._mk_btn(f_ollama, "↻", _load_models, "ghost", width=34, height=28, font="reg").pack(side=tk.LEFT, padx=3)
         lbl_ollama_status.pack(anchor="w", padx=24, pady=(1, 4))
         _load_models()
 
@@ -3341,7 +3349,7 @@ class ModernTranslatorApp(ctk.CTk):
             })
             save_app_config(self.cfg)
 
-            self.btn_engine.configure(text=f"🌐 {self.translation_engine.upper()}")
+            self.btn_engine.configure(text=self.translation_engine.upper())
             self.update_ai_btn_text()
             dlg.destroy()
             self.toast_show(t("toast_settings_saved"), "success")

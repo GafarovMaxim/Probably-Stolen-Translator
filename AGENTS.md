@@ -116,6 +116,6 @@ python -m PyInstaller --noconfirm --onefile --windowed --name "ProbablyTranslato
 
 - Никаких сетевых/дисковых/subprocess-вызовов в UI-потоке: только `threading.Thread` + `self.after(0, ...)`.
 - Динамические списки — пул виджетов или canvas (`ModLibraryView`), а не пересоздание CTk-виджетов.
-- Цвета берутся из `Theme`; тексты — из `I18N` (ru и en).
+- Цвета берутся из `Theme` (палитра «графит + индиго»); тексты — из `I18N` (ru и en). Эмодзи в UI не использовать: на Windows они рисуются мелкими монохромными значками — только простые символы (●, ○, ▲, ↑, ↻).
 - Все виджеты создаются ДО `setup_native_drag_and_drop`, иначе над ними появится знак 🚫.
 - Данные строки читать из `ModProject.by_index`, а не из ячеек Treeview.
